@@ -88,14 +88,23 @@ router.post('/signup', async (req, res) => {
     // Send email verification
     await sendEmailVerification(user);
     
-    // Generate JWT
-    const token = jwt.sign({ userId: user._id }, process.env.JWT_SECRET, {
-      expiresIn: process.env.JWT_EXPIRE,
-    });
+    // Generate token pair (access + refresh)
+    const { accessToken, refreshToken } = generateTokenPair(user._id);
     
     res.json({
-      token,
-      user: { id: user._id, email: user.email, firstName: user.firstName },
+      accessToken,
+      refreshToken,
+      user: {
+        id: user._id,
+        email: user.email,
+        phone: user.phone || '',
+        firstName: user.firstName,
+        lastName: user.lastName,
+        avatar: user.profilePicture,
+        status: user.accountStatus || 'active',
+        kycStatus: user.kyc?.verified ? 'verified' : 'pending',
+        createdAt: user.createdAt
+      },
       message: 'Signup successful. Please verify your email.',
     });
   } catch (err) {
@@ -137,12 +146,26 @@ router.post('/login', async (req, res) => {
       return res.status(401).json({ error: 'Invalid credentials' });
     }
     
-    const token = jwt.sign({ userId: user._id }, process.env.JWT_SECRET, {
-      expiresIn: process.env.JWT_EXPIRE,
-    });
+    // Generate token pair (access + refresh)
+    const { accessToken, refreshToken } = generateTokenPair(user._id);
     
-    res.json({ token, user: { id: user._id, email: user.email, firstName: user.firstName } });
+    res.json({ 
+      accessToken, 
+      refreshToken,
+      user: { 
+        id: user._id,
+        email: user.email,
+        phone: user.phone || '',
+        firstName: user.firstName,
+        lastName: user.lastName,
+        avatar: user.profilePicture,
+        status: user.accountStatus || 'active',
+        kycStatus: user.kyc?.verified ? 'verified' : 'pending',
+        createdAt: user.createdAt
+      } 
+    });
   } catch (err) {
+    logger.error('Login failed', err.message);
     res.status(500).json({ error: 'Login failed' });
   }
 });
@@ -201,12 +224,26 @@ router.post('/google', async (req, res) => {
       await user.save();
     }
     
-    const token = jwt.sign({ userId: user._id }, process.env.JWT_SECRET, {
-      expiresIn: process.env.JWT_EXPIRE,
-    });
+    // Generate token pair (access + refresh)
+    const { accessToken, refreshToken } = generateTokenPair(user._id);
     
-    res.json({ token, user: { id: user._id, email: user.email, firstName: user.firstName } });
+    res.json({ 
+      accessToken, 
+      refreshToken,
+      user: { 
+        id: user._id,
+        email: user.email,
+        phone: user.phone || '',
+        firstName: user.firstName,
+        lastName: user.lastName,
+        avatar: user.profilePicture,
+        status: user.accountStatus || 'active',
+        kycStatus: user.kyc?.verified ? 'verified' : 'pending',
+        createdAt: user.createdAt
+      } 
+    });
   } catch (err) {
+    logger.error('Google sign-in failed', err.message);
     res.status(500).json({ error: 'Google sign-in failed' });
   }
 });
