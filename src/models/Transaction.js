@@ -2,20 +2,24 @@ const mongoose = require('mongoose');
 
 const transactionSchema = new mongoose.Schema({
   sender: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
-  receiver: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
+  receiver: { type: mongoose.Schema.Types.ObjectId, ref: 'User' }, // Optional for wallet funding
   
   amount: { type: Number, required: true }, // in cents
   currency: { type: String, default: 'USD' },
   
   type: { 
     type: String, 
-    enum: ['peer-to-peer', 'combine-split', 'payout'], 
+    enum: ['peer-to-peer', 'combine-split', 'payout', 'wallet_funding'], 
     required: true 
   },
   
-  // Chimoney integration
+  // Chimoney integration (deprecated but kept for backward compatibility)
   chimonyTransactionId: String,
-  chimonyStatus: { type: String, default: 'pending' }, // pending, completed, failed
+  chimonyStatus: { type: String, default: 'pending' },
+  
+  // Flutterwave integration
+  flutterwaveTransactionId: String,
+  flutterwaveReference: String,
   
   // Details
   description: String,
@@ -29,7 +33,7 @@ const transactionSchema = new mongoose.Schema({
   },
   
   // Metadata
-  method: String, // bank_transfer, mobile_money, chimoney, etc.
+  method: String, // bank_transfer, mobile_money, flutterwave, internal, etc.
   metadata: mongoose.Schema.Types.Mixed,
   
   createdAt: { type: Date, default: Date.now },
@@ -37,3 +41,4 @@ const transactionSchema = new mongoose.Schema({
 }, { timestamps: true });
 
 module.exports = mongoose.model('Transaction', transactionSchema);
+
