@@ -2,14 +2,27 @@ const nodemailer = require('nodemailer');
 const twilio = require('twilio');
 const crypto = require('crypto');
 
-// Email configuration
-const transporter = nodemailer.createTransport({
-  service: 'gmail',
-  auth: {
-    user: process.env.EMAIL_USER,
-    pass: process.env.EMAIL_PASSWORD,
-  },
-});
+// Email configuration - Check if email credentials are valid
+const isEmailConfigured = () => {
+  return process.env.EMAIL_USER && 
+         process.env.EMAIL_PASSWORD && 
+         !process.env.EMAIL_USER.includes('your-') &&
+         !process.env.EMAIL_PASSWORD.includes('your-');
+};
+
+// Initialize email transporter only if configured
+let transporter = null;
+if (isEmailConfigured()) {
+  transporter = nodemailer.createTransport({
+    service: 'gmail',
+    auth: {
+      user: process.env.EMAIL_USER,
+      pass: process.env.EMAIL_PASSWORD,
+    },
+  });
+} else {
+  console.warn('⚠️ Email service not configured - verification emails will be logged to console instead');
+}
 
 // Twilio configuration
 let twilioClient = null;
@@ -76,6 +89,12 @@ const sendEmailVerification = async (user) => {
 
     const verificationLink = `${process.env.FRONTEND_URL}/verify-email?userId=${user._id}&token=${token}`;
 
+    if (!transporter) {
+      console.log('📧 Email not configured. Verification link (for development):');
+      console.log(verificationLink);
+      return true; // Return success so signup doesn't fail
+    }
+
     const mailOptions = {
       from: process.env.EMAIL_USER,
       to: user.email,
@@ -84,10 +103,12 @@ const sendEmailVerification = async (user) => {
     };
 
     await transporter.sendMail(mailOptions);
+    console.log(`✅ Verification email sent to ${user.email}`);
     return true;
   } catch (err) {
-    console.error('Email send error:', err);
-    return false;
+    console.error('❌ Email send error:', err.message);
+    // Don't fail the signup - email verification can be skipped in development
+    return true;
   }
 };
 

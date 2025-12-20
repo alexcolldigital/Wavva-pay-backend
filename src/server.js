@@ -10,7 +10,7 @@ const swaggerSpec = require('../swagger');
 const app = express();
 
 // Parse allowed origins from environment variable
-const allowedOrigins = (process.env.ALLOWED_ORIGINS || 'http://localhost:5173,http://localhost:8081').split(',').map(origin => origin.trim());
+const allowedOrigins = (process.env.ALLOWED_ORIGINS || 'http://localhost:5173,http://localhost:8081,http://localhost:3000,https://wavvapay.vercel.app').split(',').map(origin => origin.trim());
 logger.info('CORS allowed origins:', allowedOrigins);
 
 // Security middleware
