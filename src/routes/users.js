@@ -3,7 +3,41 @@ const authMiddleware = require('../middleware/auth');
 const User = require('../models/User');
 const Wallet = require('../models/Wallet');
 const { generateUserId, validateUsername, validatePhone, parseUserIdentifier } = require('../utils/userIdentifier');
+const multer = require('multer');
+const path = require('path');
+const fs = require('fs');
 const router = express.Router();
+
+// Configure multer for image uploads
+const storage = multer.diskStorage({
+  destination: (req, file, cb) => {
+    const uploadDir = path.join(__dirname, '../../uploads/profiles');
+    // Create directory if it doesn't exist
+    if (!fs.existsSync(uploadDir)) {
+      fs.mkdirSync(uploadDir, { recursive: true });
+    }
+    cb(null, uploadDir);
+  },
+  filename: (req, file, cb) => {
+    // Use userId and timestamp for unique filename
+    const ext = path.extname(file.originalname);
+    const filename = `${req.userId}_${Date.now()}${ext}`;
+    cb(null, filename);
+  },
+});
+
+const upload = multer({
+  storage: storage,
+  limits: { fileSize: 5 * 1024 * 1024 }, // 5MB limit
+  fileFilter: (req, file, cb) => {
+    const allowedMimes = ['image/jpeg', 'image/png', 'image/gif', 'image/webp'];
+    if (allowedMimes.includes(file.mimetype)) {
+      cb(null, true);
+    } else {
+      cb(new Error('Invalid file type. Only JPG, PNG, GIF, and WebP are allowed.'));
+    }
+  },
+});
 
 // Get user profile
 router.get('/profile', authMiddleware, async (req, res) => {
@@ -49,6 +83,67 @@ router.put('/profile', authMiddleware, async (req, res) => {
   } catch (err) {
     console.error('Profile update error:', err);
     res.status(500).json({ error: 'Update failed' });
+  }
+});
+
+// Upload profile picture
+router.post('/upload-profile-picture', authMiddleware, upload.single('image'), async (req, res) => {
+  try {
+    if (!req.file) {
+      return res.status(400).json({ error: 'No image file provided' });
+    }
+
+    // Generate URL for the uploaded file
+    const imageUrl = `/uploads/profiles/${req.file.filename}`;
+
+    // Update user profile with new picture URL
+    const user = await User.findByIdAndUpdate(
+      req.userId,
+      { profilePicture: imageUrl },
+      { new: true }
+    ).select('-passwordHash');
+
+    if (!user) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+
+    res.json({
+      success: true,
+      url: imageUrl,
+      message: 'Profile picture uploaded successfully',
+    });
+  } catch (err) {
+    console.error('Profile picture upload error:', err);
+    res.status(500).json({ error: 'Failed to upload profile picture' });
+  }
+});
+
+// Delete profile picture
+router.delete('/profile-picture', authMiddleware, async (req, res) => {
+  try {
+    const user = await User.findById(req.userId);
+
+    if (!user || !user.profilePicture) {
+      return res.status(404).json({ error: 'No profile picture to delete' });
+    }
+
+    // Delete file from disk
+    const filePath = path.join(__dirname, '../../', user.profilePicture);
+    if (fs.existsSync(filePath)) {
+      fs.unlinkSync(filePath);
+    }
+
+    // Remove picture URL from user
+    user.profilePicture = null;
+    await user.save();
+
+    res.json({
+      success: true,
+      message: 'Profile picture deleted successfully',
+    });
+  } catch (err) {
+    console.error('Profile picture delete error:', err);
+    res.status(500).json({ error: 'Failed to delete profile picture' });
   }
 });
 

@@ -24,6 +24,10 @@ app.use(cors({
 app.use(express.json({ limit: '10kb' }));
 app.use(express.urlencoded({ extended: true, limit: '10kb' }));
 
+// Static file serving for uploads
+const path = require('path');
+app.use('/uploads', express.static(path.join(__dirname, '../uploads')));
+
 // Rate limiting and validation middleware
 const { apiLimiter } = require('./middleware/rateLimiter');
 const { inputValidator } = require('./middleware/validation');
