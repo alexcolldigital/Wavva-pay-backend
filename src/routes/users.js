@@ -124,4 +124,83 @@ router.get('/wallet', authMiddleware, async (req, res) => {
   }
 });
 
+// Change password
+router.post('/change-password', authMiddleware, async (req, res) => {
+  try {
+    const { currentPassword, newPassword, confirmPassword } = req.body;
+
+    // Validate input
+    if (!currentPassword || !newPassword || !confirmPassword) {
+      return res.status(400).json({ error: 'All fields are required' });
+    }
+
+    if (newPassword !== confirmPassword) {
+      return res.status(400).json({ error: 'Passwords do not match' });
+    }
+
+    if (newPassword.length < 6) {
+      return res.status(400).json({ error: 'Password must be at least 6 characters' });
+    }
+
+    // Get user
+    const user = await User.findById(req.userId);
+    if (!user) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+
+    // Check current password
+    const isPasswordCorrect = await user.comparePassword(currentPassword);
+    if (!isPasswordCorrect) {
+      return res.status(401).json({ error: 'Current password is incorrect' });
+    }
+
+    // Update password
+    user.passwordHash = newPassword;
+    await user.save();
+
+    res.json({ message: 'Password changed successfully' });
+  } catch (err) {
+    console.error('Change password error:', err);
+    res.status(500).json({ error: 'Failed to change password' });
+  }
+});
+
+// Get notification preferences
+router.get('/notification-preferences', authMiddleware, async (req, res) => {
+  try {
+    const user = await User.findById(req.userId);
+    if (!user) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+
+    res.json(user.notificationPreferences);
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to fetch notification preferences' });
+  }
+});
+
+// Update notification preferences
+router.put('/notification-preferences', authMiddleware, async (req, res) => {
+  try {
+    const { emailNotifications, smsNotifications, pushNotifications } = req.body;
+
+    const user = await User.findByIdAndUpdate(
+      req.userId,
+      {
+        notificationPreferences: {
+          emailNotifications: emailNotifications !== undefined ? emailNotifications : true,
+          smsNotifications: smsNotifications !== undefined ? smsNotifications : true,
+          pushNotifications: pushNotifications !== undefined ? pushNotifications : true,
+        }
+      },
+      { new: true }
+    ).select('-passwordHash');
+
+    res.json(user.notificationPreferences);
+  } catch (err) {
+    console.error('Update notification preferences error:', err);
+    res.status(500).json({ error: 'Failed to update notification preferences' });
+  }
+});
+
 module.exports = router;
