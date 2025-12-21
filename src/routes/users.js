@@ -2,6 +2,7 @@ const express = require('express');
 const authMiddleware = require('../middleware/auth');
 const User = require('../models/User');
 const Wallet = require('../models/Wallet');
+const { generateUserId, validateUsername, validatePhone, parseUserIdentifier } = require('../utils/userIdentifier');
 const router = express.Router();
 
 // Get user profile
@@ -48,6 +49,152 @@ router.put('/profile', authMiddleware, async (req, res) => {
   } catch (err) {
     console.error('Profile update error:', err);
     res.status(500).json({ error: 'Update failed' });
+  }
+});
+
+// Lookup user by username, phone, or userId
+router.get('/lookup/:identifier', authMiddleware, async (req, res) => {
+  try {
+    const { identifier } = req.params;
+
+    if (!identifier) {
+      return res.status(400).json({ error: 'Identifier is required' });
+    }
+
+    const parsed = parseUserIdentifier(identifier);
+    if (!parsed) {
+      return res.status(400).json({ error: 'Invalid identifier format' });
+    }
+
+    let user;
+    if (parsed.type === 'userId') {
+      user = await User.findOne({ userId: parsed.value });
+    } else if (parsed.type === 'phone') {
+      user = await User.findOne({ phone: parsed.value });
+    } else {
+      user = await User.findOne({ username: parsed.value.toLowerCase() });
+    }
+
+    if (!user) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+
+    // Don't return sensitive information
+    res.json({
+      _id: user._id,
+      firstName: user.firstName,
+      lastName: user.lastName,
+      username: user.username,
+      userId: user.userId,
+      profilePicture: user.profilePicture,
+      email: user.email,
+    });
+  } catch (err) {
+    console.error('User lookup error:', err);
+    res.status(500).json({ error: 'Failed to lookup user' });
+  }
+});
+
+// Search users by name or identifier
+router.get('/search', authMiddleware, async (req, res) => {
+  try {
+    const { query } = req.query;
+
+    if (!query || query.length < 2) {
+      return res.status(400).json({ error: 'Query must be at least 2 characters' });
+    }
+
+    const searchQuery = query.toLowerCase();
+
+    // Search by name, username, or userId
+    const users = await User.find({
+      $or: [
+        { firstName: { $regex: searchQuery, $options: 'i' } },
+        { lastName: { $regex: searchQuery, $options: 'i' } },
+        { username: { $regex: searchQuery, $options: 'i' } },
+        { userId: { $regex: searchQuery, $options: 'i' } },
+        { phone: { $regex: searchQuery, $options: 'i' } },
+      ],
+      _id: { $ne: req.userId }, // Exclude current user
+    })
+      .select('firstName lastName username userId profilePicture email phone')
+      .limit(10);
+
+    res.json(users);
+  } catch (err) {
+    console.error('User search error:', err);
+    res.status(500).json({ error: 'Failed to search users' });
+  }
+});
+
+// Check username availability
+router.post('/check-username', authMiddleware, async (req, res) => {
+  try {
+    const { username } = req.body;
+
+    if (!username) {
+      return res.status(400).json({ error: 'Username is required' });
+    }
+
+    if (!validateUsername(username)) {
+      return res.status(400).json({
+        error: 'Username must be 3-20 characters, alphanumeric and underscores only',
+      });
+    }
+
+    const existingUser = await User.findOne({ username: username.toLowerCase() });
+
+    res.json({
+      available: !existingUser,
+      username: username.toLowerCase(),
+    });
+  } catch (err) {
+    console.error('Username check error:', err);
+    res.status(500).json({ error: 'Failed to check username' });
+  }
+});
+
+// Set/Update username and userId for user
+router.post('/set-username', authMiddleware, async (req, res) => {
+  try {
+    const { username } = req.body;
+
+    if (!username) {
+      return res.status(400).json({ error: 'Username is required' });
+    }
+
+    if (!validateUsername(username)) {
+      return res.status(400).json({
+        error: 'Username must be 3-20 characters, alphanumeric and underscores only',
+      });
+    }
+
+    const normalizedUsername = username.toLowerCase();
+    const existingUser = await User.findOne({ username: normalizedUsername });
+
+    if (existingUser && existingUser._id.toString() !== req.userId) {
+      return res.status(409).json({ error: 'Username already taken' });
+    }
+
+    const user = await User.findById(req.userId);
+    if (!user) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+
+    // Generate new userId if not set, or regenerate if username changed
+    user.username = normalizedUsername;
+    user.userId = generateUserId(normalizedUsername);
+    await user.save();
+
+    res.json({
+      success: true,
+      username: user.username,
+      userId: user.userId,
+      message: 'Username updated successfully',
+    });
+  } catch (err) {
+    console.error('Set username error:', err);
+    res.status(500).json({ error: 'Failed to set username' });
   }
 });
 

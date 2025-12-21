@@ -6,6 +6,11 @@ const userSchema = new mongoose.Schema({
   lastName: { type: String, required: true },
   email: { type: String, unique: true, sparse: true },
   phone: { type: String, unique: true, sparse: true },
+  
+  // Unique identifiers for P2P transfers
+  username: { type: String, unique: true, sparse: true, lowercase: true, trim: true, minlength: 3, maxlength: 20 },
+  userId: { type: String, unique: true, sparse: true }, // Generated unique ID (e.g., @user_12345)
+  
   passwordHash: String,
   googleId: { type: String, unique: true, sparse: true },
   profilePicture: String,
