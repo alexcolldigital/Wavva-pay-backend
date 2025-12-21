@@ -50,20 +50,39 @@ const userSchema = new mongoose.Schema({
     pushNotifications: { type: Boolean, default: true },
   },
   
+  // Security - 4-digit PIN for transactions
+  pin: String,
+  pinAttempts: { type: Number, default: 0 },
+  pinLockedUntil: Date,
+  
   createdAt: { type: Date, default: Date.now },
   updatedAt: { type: Date, default: Date.now },
 }, { timestamps: true });
 
-// Hash password before saving
+// Hash password and PIN before saving
 userSchema.pre('save', async function(next) {
-  if (!this.isModified('passwordHash')) return next();
-  this.passwordHash = await bcrypt.hash(this.passwordHash, 10);
+  if (!this.isModified('passwordHash') && !this.isModified('pin')) return next();
+  
+  if (this.isModified('passwordHash')) {
+    this.passwordHash = await bcrypt.hash(this.passwordHash, 10);
+  }
+  
+  if (this.isModified('pin') && this.pin) {
+    this.pin = await bcrypt.hash(this.pin, 10);
+  }
+  
   next();
 });
 
 // Compare password method
 userSchema.methods.comparePassword = async function(password) {
   return bcrypt.compare(password, this.passwordHash);
+};
+
+// Compare PIN method
+userSchema.methods.comparePin = async function(pin) {
+  if (!this.pin) return false;
+  return bcrypt.compare(pin, this.pin);
 };
 
 module.exports = mongoose.model('User', userSchema);

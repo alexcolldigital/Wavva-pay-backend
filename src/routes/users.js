@@ -215,4 +215,151 @@ router.put('/notification-preferences', authMiddleware, async (req, res) => {
   }
 });
 
+// Check if user has PIN set
+router.get('/pin-status', authMiddleware, async (req, res) => {
+  try {
+    const user = await User.findById(req.userId).select('pin');
+    
+    res.json({
+      isSet: !!user?.pin,
+    });
+  } catch (err) {
+    console.error('PIN status error:', err);
+    res.status(500).json({ error: 'Failed to check PIN status' });
+  }
+});
+
+// Set a new PIN
+router.post('/set-pin', authMiddleware, async (req, res) => {
+  try {
+    const { pin } = req.body;
+
+    // Validation
+    if (!pin || pin.length !== 4 || !/^\d+$/.test(pin)) {
+      return res.status(400).json({ error: 'PIN must be 4 digits' });
+    }
+
+    const user = await User.findById(req.userId);
+    if (!user) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+
+    user.pin = pin;
+    user.pinAttempts = 0;
+    user.pinLockedUntil = null;
+    await user.save();
+
+    res.json({
+      success: true,
+      message: 'PIN set successfully',
+      isSet: true,
+    });
+  } catch (err) {
+    console.error('Set PIN error:', err);
+    res.status(500).json({ error: 'Failed to set PIN' });
+  }
+});
+
+// Verify PIN
+router.post('/verify-pin', authMiddleware, async (req, res) => {
+  try {
+    const { pin } = req.body;
+
+    if (!pin || pin.length !== 4 || !/^\d+$/.test(pin)) {
+      return res.status(400).json({ error: 'PIN must be 4 digits' });
+    }
+
+    const user = await User.findById(req.userId);
+    if (!user) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+
+    // Check if user is locked due to too many attempts
+    if (user.pinLockedUntil && user.pinLockedUntil > new Date()) {
+      return res.status(429).json({ error: 'Too many attempts. Try again later.' });
+    }
+
+    // Check if PIN is set
+    if (!user.pin) {
+      return res.status(400).json({ error: 'PIN not set. Please set up a PIN first.' });
+    }
+
+    // Verify PIN
+    const isPinCorrect = await user.comparePin(pin);
+
+    if (!isPinCorrect) {
+      user.pinAttempts = (user.pinAttempts || 0) + 1;
+
+      // Lock account after 3 failed attempts for 15 minutes
+      if (user.pinAttempts >= 3) {
+        user.pinLockedUntil = new Date(Date.now() + 15 * 60 * 1000);
+      }
+
+      await user.save();
+      return res.status(401).json({ error: 'Incorrect PIN' });
+    }
+
+    // Reset attempts on successful verification
+    user.pinAttempts = 0;
+    user.pinLockedUntil = null;
+    await user.save();
+
+    res.json({
+      success: true,
+      message: 'PIN verified successfully',
+    });
+  } catch (err) {
+    console.error('Verify PIN error:', err);
+    res.status(500).json({ error: 'Failed to verify PIN' });
+  }
+});
+
+// Change PIN
+router.post('/change-pin', authMiddleware, async (req, res) => {
+  try {
+    const { oldPin, newPin } = req.body;
+
+    if (!oldPin || oldPin.length !== 4 || !/^\d+$/.test(oldPin)) {
+      return res.status(400).json({ error: 'Current PIN must be 4 digits' });
+    }
+
+    if (!newPin || newPin.length !== 4 || !/^\d+$/.test(newPin)) {
+      return res.status(400).json({ error: 'New PIN must be 4 digits' });
+    }
+
+    if (oldPin === newPin) {
+      return res.status(400).json({ error: 'New PIN must be different from current PIN' });
+    }
+
+    const user = await User.findById(req.userId);
+    if (!user) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+
+    if (!user.pin) {
+      return res.status(400).json({ error: 'PIN not set. Please set up a PIN first.' });
+    }
+
+    // Verify old PIN
+    const isOldPinCorrect = await user.comparePin(oldPin);
+    if (!isOldPinCorrect) {
+      return res.status(401).json({ error: 'Current PIN is incorrect' });
+    }
+
+    // Set new PIN
+    user.pin = newPin;
+    user.pinAttempts = 0;
+    user.pinLockedUntil = null;
+    await user.save();
+
+    res.json({
+      success: true,
+      message: 'PIN changed successfully',
+    });
+  } catch (err) {
+    console.error('Change PIN error:', err);
+    res.status(500).json({ error: 'Failed to change PIN' });
+  }
+});
+
 module.exports = router;
