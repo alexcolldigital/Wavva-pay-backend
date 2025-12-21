@@ -383,9 +383,9 @@ router.post('/generate-qr-token', authMiddleware, async (req, res) => {
     const { amount, description, type = 'payment' } = req.body;
     const userId = req.userId;
 
-    // Validation
-    if (!amount || amount <= 0) {
-      return res.status(400).json({ error: 'Invalid amount' });
+    // Validation - amount required only for payment type
+    if (type === 'payment' && (!amount || amount <= 0)) {
+      return res.status(400).json({ error: 'Invalid amount for payment QR code' });
     }
 
     // Get user details
@@ -398,7 +398,7 @@ router.post('/generate-qr-token', authMiddleware, async (req, res) => {
     // Token format: qr_[timestamp]_[userId]_[amount]_[random]
     const timestamp = Date.now();
     const random = Math.random().toString(36).substring(2, 15);
-    const token = `qr_${timestamp}_${userId}_${amount}_${random}`;
+    const token = `qr_${timestamp}_${userId}_${amount || 'profile'}_${random}`;
 
     // Store token in database for verification (expires in 24 hours)
     const expiresAt = new Date(timestamp + 24 * 60 * 60 * 1000);
@@ -407,8 +407,8 @@ router.post('/generate-qr-token', authMiddleware, async (req, res) => {
       success: true,
       token,
       type,
-      amount,
-      description,
+      amount: type === 'payment' ? amount : undefined,
+      description: type === 'payment' ? description : undefined,
       userId,
       userName: user.fullName || user.email,
       expiresAt,
