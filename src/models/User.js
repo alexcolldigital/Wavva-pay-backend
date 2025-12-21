@@ -17,8 +17,9 @@ const userSchema = new mongoose.Schema({
   
   // Verification
   emailVerified: { type: Boolean, default: false },
+  emailVerificationCode: String,
+  emailVerificationCodeExpires: Date,
   phoneVerified: { type: Boolean, default: false },
-  emailVerificationToken: String,
   phoneVerificationOTP: String,
   phoneVerificationExpires: Date,
   

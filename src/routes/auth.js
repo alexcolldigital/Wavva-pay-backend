@@ -2,7 +2,7 @@ const express = require('express');
 const jwt = require('jsonwebtoken');
 const User = require('../models/User');
 const Wallet = require('../models/Wallet');
-const { sendEmailVerification, sendOTP } = require('../services/notifications');
+const { sendEmailVerification, sendEmailVerificationCode, sendOTP } = require('../services/notifications');
 const { generateTokenPair, verifyToken } = require('../utils/tokenManager');
 const logger = require('../utils/logger');
 const router = express.Router();
@@ -85,8 +85,8 @@ router.post('/signup', async (req, res) => {
     user.walletId = wallet._id;
     await user.save();
     
-    // Send email verification
-    await sendEmailVerification(user);
+    // Send email verification code
+    await sendEmailVerificationCode(user);
     
     // Generate token pair (access + refresh)
     const { accessToken, refreshToken } = generateTokenPair(user._id);
@@ -105,7 +105,7 @@ router.post('/signup', async (req, res) => {
         kycStatus: user.kyc?.verified ? 'verified' : 'pending',
         createdAt: user.createdAt
       },
-      message: 'Signup successful. Please verify your email.',
+      message: 'Signup successful. Please verify your email with the code sent to your inbox.',
     });
   } catch (err) {
     console.error(err);
@@ -484,11 +484,117 @@ router.post('/reset-password', async (req, res) => {
 
 /**
  * @swagger
+ * /auth/send-email-verification-code:
+ *   post:
+ *     tags:
+ *       - Authentication
+ *     summary: Send email verification code (8 digits)
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             properties:
+ *               userId:
+ *                 type: string
+ *     responses:
+ *       200:
+ *         description: Verification code sent
+ */
+router.post('/send-email-verification-code', async (req, res) => {
+  try {
+    const { userId } = req.body;
+    
+    if (!userId) {
+      return res.status(400).json({ error: 'User ID required' });
+    }
+    
+    const user = await User.findById(userId);
+    if (!user) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+    
+    if (user.emailVerified) {
+      return res.status(400).json({ error: 'Email already verified' });
+    }
+    
+    await sendEmailVerificationCode(user);
+    logger.info('Email verification code sent', { userId: user._id });
+    
+    res.json({ message: 'Verification code sent to your email' });
+  } catch (err) {
+    logger.error('Send verification code failed', err.message);
+    res.status(500).json({ error: 'Failed to send verification code' });
+  }
+});
+
+/**
+ * @swagger
+ * /auth/verify-email-code:
+ *   post:
+ *     tags:
+ *       - Authentication
+ *     summary: Verify email with 8-digit code
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             properties:
+ *               userId:
+ *                 type: string
+ *               code:
+ *                 type: string
+ *     responses:
+ *       200:
+ *         description: Email verified successfully
+ */
+router.post('/verify-email-code', async (req, res) => {
+  try {
+    const { userId, code } = req.body;
+    
+    if (!userId || !code) {
+      return res.status(400).json({ error: 'User ID and code required' });
+    }
+    
+    const user = await User.findById(userId);
+    if (!user) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+    
+    // Check if code is expired
+    if (!user.emailVerificationCodeExpires || new Date() > user.emailVerificationCodeExpires) {
+      return res.status(400).json({ error: 'Verification code has expired' });
+    }
+    
+    // Check if code matches
+    if (user.emailVerificationCode !== code) {
+      return res.status(400).json({ error: 'Invalid verification code' });
+    }
+    
+    // Mark email as verified
+    user.emailVerified = true;
+    user.emailVerificationCode = null;
+    user.emailVerificationCodeExpires = null;
+    await user.save();
+    
+    logger.info('Email verified with code', { userId: user._id });
+    res.json({ message: 'Email verified successfully' });
+  } catch (err) {
+    logger.error('Email code verification failed', err.message);
+    res.status(500).json({ error: 'Email verification failed' });
+  }
+});
+
+/**
+ * @swagger
  * /auth/verify-email:
  *   post:
  *     tags:
  *       - Authentication
- *     summary: Verify email with token
+ *     summary: Verify email with token (legacy)
  *     requestBody:
  *       required: true
  *       content:
