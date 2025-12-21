@@ -55,18 +55,21 @@ router.post('/signup', async (req, res) => {
   try {
     const { firstName, lastName, email, phone, password } = req.body;
     
-    logger.info('Signup attempt', { email, firstName });
+    console.log('[DEBUG] Signup request received:', { firstName, email });
     
     // Validation
     if (!firstName || !email || !password) {
-      logger.warn('Signup validation failed - missing fields', { firstName, email, password: !!password });
-      return res.status(400).json({ error: 'Missing required fields: firstName, email, and password are required' });
+      console.log('[DEBUG] Validation failed:', { firstName: !!firstName, email: !!email, password: !!password });
+      return res.status(400).json({ 
+        error: 'Missing required fields',
+        details: { firstName: !!firstName, email: !!email, password: !!password }
+      });
     }
     
     // Check if user exists
     const existing = await User.findOne({ $or: [{ email }, { phone }] });
     if (existing) {
-      logger.warn('Signup failed - user already exists', { email });
+      console.log('[DEBUG] User already exists:', email);
       return res.status(400).json({ error: 'User already exists' });
     }
     
@@ -80,21 +83,18 @@ router.post('/signup', async (req, res) => {
       qrCodeData: `wavva_pay_${email}_${Date.now()}`, // Unique QR code
     });
     
-    logger.info('Saving new user', { email });
     await user.save();
-    logger.info('User saved successfully', { userId: user._id, email });
+    console.log('[DEBUG] User saved:', user._id);
     
     // Create wallet
     const wallet = new Wallet({ userId: user._id });
     await wallet.save();
-    logger.info('Wallet created', { userId: user._id, walletId: wallet._id });
     
     user.walletId = wallet._id;
     await user.save();
     
     // Send email verification code
     await sendEmailVerificationCode(user);
-    logger.info('Email verification code sent', { email });
     
     // Generate token pair (access + refresh)
     const { accessToken, refreshToken } = generateTokenPair(user._id);
@@ -117,8 +117,11 @@ router.post('/signup', async (req, res) => {
       message: 'Signup successful. Please verify your email with the code sent to your inbox.',
     });
   } catch (err) {
-    logger.error('Signup error', { message: err.message, stack: err.stack });
-    res.status(500).json({ error: err.message || 'Signup failed', details: err.message });
+    console.error('[ERROR] Signup error:', err.message, err.stack);
+    res.status(500).json({ 
+      error: err.message || 'Signup failed',
+      code: err.code
+    });
   }
 });
 
