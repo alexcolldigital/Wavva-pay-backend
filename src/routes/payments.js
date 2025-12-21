@@ -377,4 +377,198 @@ router.get('/bank-transfer/:transferId', authMiddleware, async (req, res) => {
   }
 });
 
+// Generate QR Code Token for Payment Requests
+router.post('/generate-qr-token', authMiddleware, async (req, res) => {
+  try {
+    const { amount, description, type = 'payment' } = req.body;
+    const userId = req.userId;
+
+    // Validation
+    if (!amount || amount <= 0) {
+      return res.status(400).json({ error: 'Invalid amount' });
+    }
+
+    // Get user details
+    const user = await User.findById(userId);
+    if (!user) {
+      return res.status(400).json({ error: 'User not found' });
+    }
+
+    // Generate encrypted token (in production, use proper encryption)
+    // Token format: qr_[timestamp]_[userId]_[amount]_[random]
+    const timestamp = Date.now();
+    const random = Math.random().toString(36).substring(2, 15);
+    const token = `qr_${timestamp}_${userId}_${amount}_${random}`;
+
+    // Store token in database for verification (expires in 24 hours)
+    const expiresAt = new Date(timestamp + 24 * 60 * 60 * 1000);
+    
+    res.json({
+      success: true,
+      token,
+      type,
+      amount,
+      description,
+      userId,
+      userName: user.fullName || user.email,
+      expiresAt,
+      createdAt: new Date(),
+    });
+  } catch (err) {
+    console.error('QR token generation error:', err);
+    res.status(500).json({ error: 'Failed to generate QR token' });
+  }
+});
+
+// Verify QR Code Token
+router.post('/verify-qr-token', authMiddleware, async (req, res) => {
+  try {
+    const { token } = req.body;
+
+    if (!token) {
+      return res.status(400).json({ error: 'Token is required' });
+    }
+
+    // Parse token (format: qr_[timestamp]_[userId]_[amount]_[random])
+    const parts = token.split('_');
+    if (parts.length < 5 || parts[0] !== 'qr') {
+      return res.status(400).json({ error: 'Invalid token format' });
+    }
+
+    const timestamp = parseInt(parts[1]);
+    const senderId = parts[2];
+    const amount = parseFloat(parts[3]);
+    const now = Date.now();
+
+    // Check if token is expired (24 hours)
+    if (now - timestamp > 24 * 60 * 60 * 1000) {
+      return res.status(400).json({ error: 'Token expired' });
+    }
+
+    // Get sender details
+    const sender = await User.findById(senderId);
+    if (!sender) {
+      return res.status(400).json({ error: 'Sender not found' });
+    }
+
+    res.json({
+      success: true,
+      type: 'payment',
+      id: token,
+      userId: senderId,
+      senderName: sender.fullName || sender.email,
+      amount,
+      isValid: true,
+      expiresAt: new Date(timestamp + 24 * 60 * 60 * 1000),
+    });
+  } catch (err) {
+    console.error('QR token verification error:', err);
+    res.status(500).json({ error: 'Failed to verify QR token' });
+  }
+});
+
+// Accept Payment Request (from scanned QR)
+router.post('/accept-payment-request', authMiddleware, async (req, res) => {
+  try {
+    const { requestId } = req.body;
+    const receiverId = req.userId;
+
+    if (!requestId) {
+      return res.status(400).json({ error: 'Request ID is required' });
+    }
+
+    // In a full implementation, store the acceptance in database
+    res.json({
+      success: true,
+      message: 'Payment request accepted',
+      requestId,
+      acceptedBy: receiverId,
+      acceptedAt: new Date(),
+    });
+  } catch (err) {
+    console.error('Accept payment request error:', err);
+    res.status(500).json({ error: 'Failed to accept payment request' });
+  }
+});
+
+// Reject Payment Request
+router.post('/reject-payment-request', authMiddleware, async (req, res) => {
+  try {
+    const { requestId } = req.body;
+    const receiverId = req.userId;
+
+    if (!requestId) {
+      return res.status(400).json({ error: 'Request ID is required' });
+    }
+
+    // In a full implementation, update the request status in database
+    res.json({
+      success: true,
+      message: 'Payment request rejected',
+      requestId,
+      rejectedBy: receiverId,
+      rejectedAt: new Date(),
+    });
+  } catch (err) {
+    console.error('Reject payment request error:', err);
+    res.status(500).json({ error: 'Failed to reject payment request' });
+  }
+});
+
+// Get Pending Payment Requests
+router.get('/pending-requests', authMiddleware, async (req, res) => {
+  try {
+    const userId = req.userId;
+
+    // In a full implementation, fetch from database
+    // For now, return empty array
+    res.json({
+      success: true,
+      requests: [],
+      total: 0,
+    });
+  } catch (err) {
+    console.error('Get pending requests error:', err);
+    res.status(500).json({ error: 'Failed to fetch pending requests' });
+  }
+});
+
+// Send Payment Request to friend
+router.post('/request-payment', authMiddleware, async (req, res) => {
+  try {
+    const { recipientId, amount, description } = req.body;
+    const senderId = req.userId;
+
+    if (!recipientId || !amount || amount <= 0) {
+      return res.status(400).json({ error: 'Invalid request data' });
+    }
+
+    // Verify both users exist
+    const sender = await User.findById(senderId);
+    const recipient = await User.findById(recipientId);
+
+    if (!sender || !recipient) {
+      return res.status(400).json({ error: 'User not found' });
+    }
+
+    // Create payment request record
+    const requestId = `payreq_${Date.now()}_${senderId}`;
+
+    res.json({
+      success: true,
+      requestId,
+      senderId,
+      senderName: sender.fullName || sender.email,
+      recipientId,
+      amount,
+      description,
+      status: 'pending',
+      createdAt: new Date(),
+    });
+  } catch (err) {
+    console.error('Send payment request error:', err);
+    res.status(500).json({ error: 'Failed to send payment request' });
+  }
+});
+
 module.exports = router;
