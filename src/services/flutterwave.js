@@ -151,10 +151,110 @@ const getTransferStatus = async (transferId) => {
   }
 };
 
+// Resolve bank account details
+const resolveBankAccount = async (account_number, account_bank) => {
+  try {
+    const response = await flutterwaveClient.get('/accounts/resolve', {
+      params: {
+        account_number,
+        account_bank,
+      }
+    });
+    
+    const data = response.data.data;
+    return {
+      success: true,
+      accountName: data.account_name,
+      accountNumber: data.account_number,
+      accountBank: data.account_bank,
+    };
+  } catch (err) {
+    logger.error('Flutterwave resolveBankAccount error:', err.response?.data || err.message);
+    return {
+      success: false,
+      error: err.response?.data?.message || 'Failed to resolve account',
+    };
+  }
+};
+
+// Get list of supported banks
+const getBankList = async (country = 'NG') => {
+  try {
+    const response = await flutterwaveClient.get('/banks', {
+      params: { country }
+    });
+    
+    const banks = response.data.data;
+    return {
+      success: true,
+      banks: banks.map(bank => ({
+        id: bank.id,
+        code: bank.code,
+        name: bank.name,
+      })),
+    };
+  } catch (err) {
+    logger.error('Flutterwave getBankList error:', err.response?.data || err.message);
+    return {
+      success: false,
+      error: err.response?.data?.message || 'Failed to fetch bank list',
+    };
+  }
+};
+
+// Initiate bank transfer with account verification
+const initiateBankTransfer = async (account_number, account_bank, amount, currency = 'NGN', narrative) => {
+  try {
+    // First, verify the account details
+    const verification = await resolveBankAccount(account_number, account_bank);
+    
+    if (!verification.success) {
+      return {
+        success: false,
+        error: verification.error || 'Account verification failed',
+      };
+    }
+
+    // If verification succeeds, proceed with transfer
+    const payload = {
+      account_number,
+      account_bank,
+      amount,
+      currency,
+      narrative: narrative || 'Payment from Wavva Pay',
+      reference: `BANK-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
+      debit_currency: currency,
+    };
+
+    const response = await flutterwaveClient.post('/transfers', payload);
+    
+    logger.info(`Bank transfer initiated: ${payload.reference}`);
+    
+    return {
+      success: true,
+      transferId: response.data.data.id,
+      reference: payload.reference,
+      status: response.data.data.status,
+      accountName: verification.accountName,
+      amount: amount,
+      currency: currency,
+    };
+  } catch (err) {
+    logger.error('Flutterwave initiateBankTransfer error:', err.response?.data || err.message);
+    return {
+      success: false,
+      error: err.response?.data?.message || 'Bank transfer failed',
+    };
+  }
+};
+
 module.exports = {
   initializePayment,
   verifyPayment,
   getTransactionDetails,
   createTransfer,
   getTransferStatus,
+  resolveBankAccount,
+  getBankList,
+  initiateBankTransfer,
 };

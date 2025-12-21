@@ -3,7 +3,7 @@ const authMiddleware = require('../middleware/auth');
 const User = require('../models/User');
 const Wallet = require('../models/Wallet');
 const Transaction = require('../models/Transaction');
-const { createTransfer, getTransferStatus } = require('../services/flutterwave');
+const { createTransfer, getTransferStatus, getBankList, initiateBankTransfer, resolveBankAccount } = require('../services/flutterwave');
 const router = express.Router();
 
 // Send money P2P (internal transfer)
@@ -194,6 +194,186 @@ router.post('/fund/verify', authMiddleware, async (req, res) => {
   } catch (err) {
     console.error('Fund verification error:', err);
     res.status(500).json({ error: 'Failed to verify payment' });
+  }
+});
+
+// Get list of supported banks
+router.get('/banks', authMiddleware, async (req, res) => {
+  try {
+    const { country = 'NG' } = req.query;
+    
+    const { getBankList } = require('../services/flutterwave');
+    const banksResult = await getBankList(country);
+
+    if (!banksResult.success) {
+      return res.status(400).json({ error: banksResult.error });
+    }
+
+    res.json({
+      success: true,
+      banks: banksResult.banks,
+    });
+  } catch (err) {
+    console.error('Bank list fetch error:', err);
+    res.status(500).json({ error: 'Failed to fetch banks' });
+  }
+});
+
+// Resolve bank account details
+router.post('/resolve-account', authMiddleware, async (req, res) => {
+  try {
+    const { account_number, account_bank } = req.body;
+
+    // Validation
+    if (!account_number || !account_bank) {
+      return res.status(400).json({ error: 'Account number and bank code required' });
+    }
+
+    const { resolveBankAccount } = require('../services/flutterwave');
+    const resolveResult = await resolveBankAccount(account_number, account_bank);
+
+    if (!resolveResult.success) {
+      return res.status(400).json({ error: resolveResult.error });
+    }
+
+    res.json({
+      success: true,
+      accountName: resolveResult.accountName,
+      accountNumber: resolveResult.accountNumber,
+    });
+  } catch (err) {
+    console.error('Account resolution error:', err);
+    res.status(500).json({ error: 'Failed to resolve account' });
+  }
+});
+
+// Initiate bank transfer
+router.post('/bank-transfer', authMiddleware, async (req, res) => {
+  try {
+    const { account_number, account_bank, amount, currency = 'NGN', description } = req.body;
+    const userId = req.userId;
+
+    // Validation
+    if (!account_number || !account_bank || !amount || amount <= 0) {
+      return res.status(400).json({ error: 'Invalid account details or amount' });
+    }
+
+    // Get user and wallet
+    const user = await User.findById(userId).populate('walletId');
+    if (!user) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+
+    if (!user.walletId) {
+      return res.status(404).json({ error: 'User wallet not found' });
+    }
+
+    // Check wallet balance
+    if (user.walletId.balance < amount * 100) {
+      return res.status(400).json({ error: 'Insufficient balance' });
+    }
+
+    // Initiate bank transfer
+    const { initiateBankTransfer } = require('../services/flutterwave');
+    const transferResult = await initiateBankTransfer(
+      account_number,
+      account_bank,
+      amount,
+      currency,
+      description || 'Payment from Wavva Pay'
+    );
+
+    if (!transferResult.success) {
+      return res.status(400).json({ error: transferResult.error });
+    }
+
+    // Create transaction record
+    const transaction = new Transaction({
+      sender: userId,
+      receiver: null,
+      amount: Math.round(amount * 100), // Store in cents
+      currency,
+      type: 'payout',
+      status: 'pending', // Will update when bank confirms
+      method: 'bank_transfer',
+      flutterwaveTransactionId: transferResult.transferId,
+      flutterwaveReference: transferResult.reference,
+      description: description || `Bank transfer to ${account_number}`,
+      metadata: {
+        accountNumber: account_number,
+        accountBank: account_bank,
+        accountName: transferResult.accountName,
+      },
+    });
+
+    await transaction.save();
+
+    // Deduct amount from wallet (funds reserved for transfer)
+    const wallet = await Wallet.findById(user.walletId);
+    wallet.balance -= Math.round(amount * 100);
+    await wallet.save();
+
+    res.json({
+      success: true,
+      transactionId: transaction._id,
+      transferId: transferResult.transferId,
+      reference: transferResult.reference,
+      status: transferResult.status,
+      message: 'Bank transfer initiated',
+      accountName: transferResult.accountName,
+    });
+  } catch (err) {
+    console.error('Bank transfer error:', err);
+    res.status(500).json({ error: 'Failed to initiate bank transfer' });
+  }
+});
+
+// Get bank transfer status
+router.get('/bank-transfer/:transferId', authMiddleware, async (req, res) => {
+  try {
+    const { transferId } = req.params;
+    const userId = req.userId;
+
+    // Find the transaction
+    const transaction = await Transaction.findOne({
+      flutterwaveTransactionId: transferId,
+      sender: userId,
+    });
+
+    if (!transaction) {
+      return res.status(404).json({ error: 'Transfer not found' });
+    }
+
+    // Get status from Flutterwave
+    const { getTransferStatus } = require('../services/flutterwave');
+    const statusResult = await getTransferStatus(transferId);
+
+    if (!statusResult.success) {
+      return res.status(400).json({ error: statusResult.error });
+    }
+
+    // Update transaction status if different
+    if (statusResult.status !== transaction.status) {
+      transaction.status = statusResult.status;
+      await transaction.save();
+    }
+
+    res.json({
+      success: true,
+      transactionId: transaction._id,
+      transferId: transferId,
+      status: statusResult.status,
+      amount: transaction.amount / 100,
+      currency: transaction.currency,
+      reference: transaction.flutterwaveReference,
+      accountNumber: transaction.metadata?.accountNumber,
+      accountName: transaction.metadata?.accountName,
+      createdAt: transaction.createdAt,
+      updatedAt: transaction.updatedAt,
+    });
+  } catch (err) {
+    console.error('Transfer status error:', err);
+    res.status(500).json({ error: 'Failed to fetch transfer status' });
   }
 });
 
