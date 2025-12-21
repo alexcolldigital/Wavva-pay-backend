@@ -25,16 +25,28 @@ router.get('/profile', authMiddleware, async (req, res) => {
 // Update user profile
 router.put('/profile', authMiddleware, async (req, res) => {
   try {
-    const { firstName, lastName, profilePicture, preferredCurrency } = req.body;
+    const { firstName, lastName, phone, profilePicture, preferredCurrency } = req.body;
+    
+    const updateData = {};
+    if (firstName) updateData.firstName = firstName;
+    if (lastName) updateData.lastName = lastName;
+    if (phone) updateData.phone = phone;
+    if (profilePicture) updateData.profilePicture = profilePicture;
+    if (preferredCurrency) updateData.preferredCurrency = preferredCurrency;
     
     const user = await User.findByIdAndUpdate(
       req.userId,
-      { firstName, lastName, profilePicture, preferredCurrency },
+      updateData,
       { new: true }
-    ).select('-passwordHash');
+    ).select('-passwordHash -emailVerificationToken -phoneVerificationOTP').populate('walletId').populate('friends', 'firstName lastName profilePicture email');
+
+    if (!user) {
+      return res.status(404).json({ error: 'User not found' });
+    }
 
     res.json(user);
   } catch (err) {
+    console.error('Profile update error:', err);
     res.status(500).json({ error: 'Update failed' });
   }
 });
