@@ -103,6 +103,7 @@ router.post('/signup', async (req, res) => {
         avatar: user.profilePicture,
         status: user.accountStatus || 'active',
         kycStatus: user.kyc?.verified ? 'verified' : 'pending',
+        isAdmin: user.isAdmin || false,
         createdAt: user.createdAt
       },
       message: 'Signup successful. Please verify your email with the code sent to your inbox.',
@@ -161,6 +162,7 @@ router.post('/login', async (req, res) => {
         avatar: user.profilePicture,
         status: user.accountStatus || 'active',
         kycStatus: user.kyc?.verified ? 'verified' : 'pending',
+        isAdmin: user.isAdmin || false,
         createdAt: user.createdAt
       } 
     });
@@ -239,6 +241,7 @@ router.post('/google', async (req, res) => {
         avatar: user.profilePicture,
         status: user.accountStatus || 'active',
         kycStatus: user.kyc?.verified ? 'verified' : 'pending',
+        isAdmin: user.isAdmin || false,
         createdAt: user.createdAt
       } 
     });
