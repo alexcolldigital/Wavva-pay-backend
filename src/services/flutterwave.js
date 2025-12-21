@@ -10,7 +10,7 @@ const flutterwaveClient = axios.create({
 });
 
 // Initialize payment
-const initializePayment = async (email, amount, currency = 'USD', metadata = {}) => {
+const initializePayment = async (email, amount, currency = 'NGN', metadata = {}) => {
   try {
     const payload = {
       tx_ref: `WVP-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,

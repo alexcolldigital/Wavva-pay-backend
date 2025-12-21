@@ -12,7 +12,7 @@ const combineSchema = new mongoose.Schema({
   
   // Bill splitting
   totalAmount: { type: Number, default: 0 }, // in cents
-  currency: { type: String, default: 'USD' },
+  currency: { type: String, default: 'NGN' },
   expenses: [{ type: mongoose.Schema.Types.ObjectId, ref: 'Expense' }],
   
   // Settlement

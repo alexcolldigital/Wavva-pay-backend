@@ -76,8 +76,8 @@ const seed = async () => {
     // Create wallets for each user
     const wallets = createdUsers.map(user => ({
       userId: user._id,
-      balance: 10000 * 100, // $10,000 in cents
-      currency: 'USD',
+      balance: 10000 * 100, // ₦10,000 in cents
+      currency: 'NGN',
       dailyLimit: 10000 * 100,
       monthlyLimit: 100000 * 100,
       multicurrencyBalances: [
@@ -102,8 +102,8 @@ const seed = async () => {
       {
         sender: createdUsers[0]._id,
         receiver: createdUsers[1]._id,
-        amount: 5000, // $50
-        currency: 'USD',
+        amount: 5000, // ₦50
+        currency: 'NGN',
         type: 'peer-to-peer',
         status: 'completed',
         description: 'Coffee payment',
@@ -112,8 +112,8 @@ const seed = async () => {
       {
         sender: createdUsers[1]._id,
         receiver: createdUsers[2]._id,
-        amount: 12500, // $125
-        currency: 'USD',
+        amount: 12500, // ₦125
+        currency: 'NGN',
         type: 'peer-to-peer',
         status: 'completed',
         description: 'Dinner split',
@@ -122,8 +122,8 @@ const seed = async () => {
       {
         sender: createdUsers[2]._id,
         receiver: createdUsers[3]._id,
-        amount: 7500, // $75
-        currency: 'USD',
+        amount: 7500, // ₦75
+        currency: 'NGN',
         type: 'peer-to-peer',
         status: 'pending',
         description: 'Movie tickets',
@@ -143,8 +143,8 @@ const seed = async () => {
         { userId: createdUsers[1]._id, role: 'member' },
         { userId: createdUsers[2]._id, role: 'member' },
       ],
-      totalAmount: 30000, // $300
-      currency: 'USD',
+      totalAmount: 30000, // ₦300
+      currency: 'NGN',
       status: 'active',
     });
 
@@ -156,17 +156,17 @@ const seed = async () => {
       {
         combineId: combine._id,
         description: 'Cabin rental',
-        amount: 20000, // $200
-        currency: 'USD',
+        amount: 20000, // ₦200
+        currency: 'NGN',
         paidBy: createdUsers[0]._id,
         splitAmong: [createdUsers[0]._id, createdUsers[1]._id, createdUsers[2]._id],
-        splitAmount: 6667, // $66.67 per person
+        splitAmount: 6667, // ₦66.67 per person
       },
       {
         combineId: combine._id,
         description: 'Groceries',
-        amount: 10000, // $100
-        currency: 'USD',
+        amount: 10000, // ₦100
+        currency: 'NGN',
         paidBy: createdUsers[1]._id,
         splitAmong: [createdUsers[0]._id, createdUsers[1]._id, createdUsers[2]._id],
         splitAmount: 3333, // $33.33 per person

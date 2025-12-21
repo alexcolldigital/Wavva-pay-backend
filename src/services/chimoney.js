@@ -9,7 +9,7 @@ const chimmoneyClient = axios.create({
 });
 
 // Send money (P2P or to mobile money)
-const sendMoney = async (recipientEmail, recipientPhone, amount, currency = 'USD') => {
+const sendMoney = async (recipientEmail, recipientPhone, amount, currency = 'NGN') => {
   try {
     const response = await chimmoneyClient.post('/payouts/chimoney', {
       chimoleyEmail: recipientEmail || undefined,

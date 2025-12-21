@@ -12,7 +12,7 @@ const router = express.Router();
 // Create a new combine
 router.post('/', authMiddleware, async (req, res) => {
   try {
-    const { name, description, members, totalAmount, currency = 'USD' } = req.body;
+    const { name, description, members, totalAmount, currency = 'NGN' } = req.body;
 
     if (!name || !members || members.length === 0) {
       return res.status(400).json({ error: 'Missing required fields' });

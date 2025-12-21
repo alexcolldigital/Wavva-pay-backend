@@ -9,7 +9,7 @@ const router = express.Router();
 // Send money P2P (internal transfer)
 router.post('/send', authMiddleware, async (req, res) => {
   try {
-    const { receiverId, amount, currency = 'USD', description } = req.body;
+    const { receiverId, amount, currency = 'NGN', description } = req.body;
     const senderId = req.userId;
     
     // Validation
@@ -90,7 +90,7 @@ router.get('/transaction-status/:transactionId', authMiddleware, async (req, res
 // Initialize Flutterwave payment for adding funds
 router.post('/fund/initialize', authMiddleware, async (req, res) => {
   try {
-    const { amount, currency = 'USD' } = req.body;
+    const { amount, currency = 'NGN' } = req.body;
     const userId = req.userId;
 
     // Validation
@@ -137,15 +137,20 @@ router.post('/fund/verify', authMiddleware, async (req, res) => {
       return res.status(400).json({ error: 'Transaction ID required' });
     }
 
-    const user = await User.findById(userId);
+    const user = await User.findById(userId).populate('walletId');
     if (!user) {
       return res.status(404).json({ error: 'User not found' });
+    }
+
+    if (!user.walletId) {
+      return res.status(404).json({ error: 'User wallet not found' });
     }
 
     const { verifyPayment } = require('../services/flutterwave');
     const verificationResult = await verifyPayment(transactionId);
 
     if (!verificationResult.success) {
+      console.error('Verification failed:', verificationResult);
       return res.status(400).json({ 
         error: 'Payment verification failed',
         status: verificationResult.status 
@@ -170,8 +175,15 @@ router.post('/fund/verify', authMiddleware, async (req, res) => {
 
     // Update wallet balance
     const wallet = await Wallet.findById(user.walletId);
+    if (!wallet) {
+      return res.status(404).json({ error: 'Wallet not found' });
+    }
+
+    const previousBalance = wallet.balance;
     wallet.balance += Math.round(verificationResult.amount * 100);
     await wallet.save();
+
+    console.log(`Wallet updated: ${userId} | Previous: ${previousBalance} | Added: ${Math.round(verificationResult.amount * 100)} | New: ${wallet.balance}`);
 
     res.json({
       success: true,

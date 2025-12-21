@@ -5,7 +5,7 @@ const transactionSchema = new mongoose.Schema({
   receiver: { type: mongoose.Schema.Types.ObjectId, ref: 'User' }, // Optional for wallet funding
   
   amount: { type: Number, required: true }, // in cents
-  currency: { type: String, default: 'USD' },
+  currency: { type: String, default: 'NGN' },
   
   type: { 
     type: String, 

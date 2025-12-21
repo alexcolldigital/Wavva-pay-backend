@@ -43,7 +43,7 @@ const userSchema = new mongoose.Schema({
   friends: [{ type: mongoose.Schema.Types.ObjectId, ref: 'User' }],
   
   // Preferences
-  preferredCurrency: { type: String, default: 'USD' },
+  preferredCurrency: { type: String, default: 'NGN' },
   notificationPreferences: {
     emailNotifications: { type: Boolean, default: true },
     smsNotifications: { type: Boolean, default: true },
