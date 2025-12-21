@@ -180,9 +180,8 @@ const resolveBankAccount = async (account_number, account_bank) => {
 // Get list of supported banks
 const getBankList = async (country = 'NG') => {
   try {
-    const response = await flutterwaveClient.get('/banks', {
-      params: { country }
-    });
+    // Flutterwave API endpoint for banks - use specific country code
+    const response = await flutterwaveClient.get(`/banks/${country}`);
     
     const banks = response.data.data;
     return {
@@ -194,6 +193,29 @@ const getBankList = async (country = 'NG') => {
       })),
     };
   } catch (err) {
+    // Try alternative endpoint if first one fails
+    if (err.response?.status === 400 || err.response?.status === 404) {
+      logger.warn(`Country ${country} not found in banks list, trying general endpoint`);
+      try {
+        const fallbackResponse = await flutterwaveClient.get('/banks');
+        const banks = fallbackResponse.data.data;
+        return {
+          success: true,
+          banks: banks.map(bank => ({
+            id: bank.id,
+            code: bank.code,
+            name: bank.name,
+          })),
+        };
+      } catch (fallbackErr) {
+        logger.error('Flutterwave getBankList fallback error:', fallbackErr.response?.data || fallbackErr.message);
+        return {
+          success: false,
+          error: fallbackErr.response?.data?.message || 'Failed to fetch bank list',
+        };
+      }
+    }
+    
     logger.error('Flutterwave getBankList error:', err.response?.data || err.message);
     return {
       success: false,
