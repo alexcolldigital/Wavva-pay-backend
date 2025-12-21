@@ -55,14 +55,18 @@ router.post('/signup', async (req, res) => {
   try {
     const { firstName, lastName, email, phone, password } = req.body;
     
+    logger.info('Signup attempt', { email, firstName });
+    
     // Validation
     if (!firstName || !email || !password) {
-      return res.status(400).json({ error: 'Missing required fields' });
+      logger.warn('Signup validation failed - missing fields', { firstName, email, password: !!password });
+      return res.status(400).json({ error: 'Missing required fields: firstName, email, and password are required' });
     }
     
     // Check if user exists
     const existing = await User.findOne({ $or: [{ email }, { phone }] });
     if (existing) {
+      logger.warn('Signup failed - user already exists', { email });
       return res.status(400).json({ error: 'User already exists' });
     }
     
@@ -76,17 +80,21 @@ router.post('/signup', async (req, res) => {
       qrCodeData: `wavva_pay_${email}_${Date.now()}`, // Unique QR code
     });
     
+    logger.info('Saving new user', { email });
     await user.save();
+    logger.info('User saved successfully', { userId: user._id, email });
     
     // Create wallet
     const wallet = new Wallet({ userId: user._id });
     await wallet.save();
+    logger.info('Wallet created', { userId: user._id, walletId: wallet._id });
     
     user.walletId = wallet._id;
     await user.save();
     
     // Send email verification code
     await sendEmailVerificationCode(user);
+    logger.info('Email verification code sent', { email });
     
     // Generate token pair (access + refresh)
     const { accessToken, refreshToken } = generateTokenPair(user._id);
@@ -109,8 +117,8 @@ router.post('/signup', async (req, res) => {
       message: 'Signup successful. Please verify your email with the code sent to your inbox.',
     });
   } catch (err) {
-    console.error(err);
-    res.status(500).json({ error: 'Signup failed' });
+    logger.error('Signup error', { message: err.message, stack: err.stack });
+    res.status(500).json({ error: err.message || 'Signup failed', details: err.message });
   }
 });
 
