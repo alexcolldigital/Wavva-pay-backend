@@ -55,14 +55,32 @@ router.post('/signup', async (req, res) => {
   try {
     const { firstName, lastName, email, phone, password } = req.body;
     
-    console.log('[DEBUG] Signup request received:', { firstName, email });
+    console.log('[DEBUG] Signup request received:', { firstName, email, body: JSON.stringify(req.body) });
     
     // Validation
     if (!firstName || !email || !password) {
-      console.log('[DEBUG] Validation failed:', { firstName: !!firstName, email: !!email, password: !!password });
+      const details = { firstName: !!firstName, email: !!email, password: !!password };
+      console.log('[DEBUG] Validation failed:', details);
       return res.status(400).json({ 
-        error: 'Missing required fields',
-        details: { firstName: !!firstName, email: !!email, password: !!password }
+        error: 'Missing required fields. Required: firstName, email, password',
+        details
+      });
+    }
+    
+    // Validate email format
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    if (!emailRegex.test(email)) {
+      console.log('[DEBUG] Invalid email format:', email);
+      return res.status(400).json({ 
+        error: 'Invalid email format'
+      });
+    }
+    
+    // Validate password length
+    if (password.length < 6) {
+      console.log('[DEBUG] Password too short');
+      return res.status(400).json({ 
+        error: 'Password must be at least 6 characters'
       });
     }
     
