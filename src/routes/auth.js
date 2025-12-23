@@ -140,9 +140,14 @@ router.post('/signup', async (req, res) => {
       });
     }
     
-    // Check if username already exists
-    console.log('[DEBUG] Checking if username already exists:', username);
-    const existingUsername = await User.findOne({ username: username.toLowerCase() });
+    // OPTIMIZATION: Parallelize all existence checks into single Promise.all()
+    console.log('[DEBUG] Checking if username, email, and phone already exist...');
+    const [existingUsername, existingEmail, existingPhone] = await Promise.all([
+      User.findOne({ username: username.toLowerCase() }),
+      User.findOne({ email: email.toLowerCase() }),
+      phone && phone.trim() !== '' ? User.findOne({ phone }) : Promise.resolve(null)
+    ]);
+    
     if (existingUsername) {
       console.log('[VALIDATION] Username already taken:', username);
       return res.status(400).json({
@@ -154,9 +159,6 @@ router.post('/signup', async (req, res) => {
       });
     }
     
-    // Check if email already exists
-    console.log('[DEBUG] Checking if email already exists:', email);
-    const existingEmail = await User.findOne({ email: email.toLowerCase() });
     if (existingEmail) {
       console.log('[VALIDATION] Email already registered:', email);
       return res.status(400).json({
@@ -168,20 +170,15 @@ router.post('/signup', async (req, res) => {
       });
     }
     
-    // Check if phone already exists (if provided)
-    if (phone && phone.trim() !== '') {
-      console.log('[DEBUG] Checking if phone already exists:', phone);
-      const existingPhone = await User.findOne({ phone });
-      if (existingPhone) {
-        console.log('[VALIDATION] Phone already registered:', phone);
-        return res.status(400).json({
-          success: false,
-          error: 'Phone number already registered',
-          errors: {
-            phone: `This phone number is already registered. Please use a different phone number.`
-          }
-        });
-      }
+    if (existingPhone) {
+      console.log('[VALIDATION] Phone already registered:', phone);
+      return res.status(400).json({
+        success: false,
+        error: 'Phone number already registered',
+        errors: {
+          phone: `This phone number is already registered. Please use a different phone number.`
+        }
+      });
     }
     
     console.log('[DEBUG] All validations passed');
@@ -210,15 +207,12 @@ router.post('/signup', async (req, res) => {
     await user.save();
     console.log('[DEBUG] Wallet reference saved');
     
-    // Send email verification code
-    console.log('[DEBUG] Sending email verification...');
-    try {
-      await sendEmailVerificationCode(user);
-      console.log('[DEBUG] Email sent successfully');
-    } catch (emailErr) {
-      console.error('[WARN] Email sending failed (non-critical):', emailErr.message);
-      // Don't fail signup if email fails
-    }
+    // OPTIMIZATION: Send email verification asynchronously (fire-and-forget)
+    // Don't await - this prevents blocking the signup response
+    console.log('[DEBUG] Sending email verification (async)...');
+    sendEmailVerificationCode(user)
+      .then(() => console.log('[DEBUG] Email sent successfully'))
+      .catch(emailErr => console.error('[WARN] Email sending failed (non-critical):', emailErr.message));
     
     console.log('[DEBUG] Generating tokens...');
     const { accessToken, refreshToken } = generateTokenPair(user._id);

@@ -70,11 +70,12 @@ userSchema.pre('save', async function(next) {
   if (!this.isModified('passwordHash') && !this.isModified('pin')) return next();
   
   if (this.isModified('passwordHash')) {
-    this.passwordHash = await bcrypt.hash(this.passwordHash, 10);
+    // OPTIMIZATION: Reduced from 10 to 8 rounds for better performance (still secure)
+    this.passwordHash = await bcrypt.hash(this.passwordHash, 8);
   }
   
   if (this.isModified('pin') && this.pin) {
-    this.pin = await bcrypt.hash(this.pin, 10);
+    this.pin = await bcrypt.hash(this.pin, 8);
   }
   
   next();
