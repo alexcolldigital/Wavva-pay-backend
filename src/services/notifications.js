@@ -39,11 +39,11 @@ const emailTemplates = {
     <html>
       <body style="font-family: Arial, sans-serif; background-color: #000; color: #fff;">
         <div style="max-width: 600px; margin: 0 auto; padding: 20px;">
-          <h2 style="color: #39FF14;">🦑 Welcome to Wavva Pay</h2>
-          <p>We are Venom. Verify your email to unleash the power of symbiotic payments.</p>
+          <h2 style="color: #1d4ed8;"> Welcome to Wavva Pay</h2>
+          <p>Thank you for creating a WavvaPay account. You're required to verify your email address with the code below.</p>
           <div style="background-color: #1a1a1a; padding: 20px; border-radius: 8px; margin: 20px 0; border-left: 4px solid #39FF14; text-align: center;">
             <p style="font-size: 14px; color: #999; margin-bottom: 10px;">Your verification code:</p>
-            <p style="font-size: 36px; font-weight: bold; color: #39FF14; letter-spacing: 5px; margin: 10px 0;">${code}</p>
+            <p style="font-size: 36px; font-weight: bold; color: #1d4ed8; letter-spacing: 5px; margin: 10px 0;">${code}</p>
             <p style="font-size: 12px; color: #999;">Valid for ${expiryMinutes} minutes</p>
           </div>
           <p style="color: #999; font-size: 12px; margin-top: 20px;">If you didn't request this code, please ignore this email.</p>

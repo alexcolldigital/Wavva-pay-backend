@@ -6,15 +6,23 @@ const Transaction = require('../models/Transaction');
 const { createTransfer, getTransferStatus, getBankList, initiateBankTransfer, resolveBankAccount } = require('../services/flutterwave');
 const router = express.Router();
 
-// Send money P2P (internal transfer)
+// Send money P2P (internal transfer) - Only via username, QR code, or NFC
 router.post('/send', authMiddleware, async (req, res) => {
   try {
-    const { receiverId, amount, currency = 'NGN', description } = req.body;
+    const { receiverId, amount, currency = 'NGN', description, method = 'username' } = req.body;
     const senderId = req.userId;
     
     // Validation
     if (!receiverId || !amount || amount <= 0) {
       return res.status(400).json({ error: 'Invalid amount or receiver' });
+    }
+
+    // Validate method (only username, qr, or nfc allowed)
+    const validMethods = ['username', 'qr', 'nfc'];
+    if (!validMethods.includes(method)) {
+      return res.status(400).json({ 
+        error: 'Invalid transfer method. Only username, QR code, and NFC are supported.' 
+      });
     }
     
     // Get sender & receiver
@@ -24,10 +32,15 @@ router.post('/send', authMiddleware, async (req, res) => {
     if (!sender || !receiver) {
       return res.status(400).json({ error: 'User not found' });
     }
+
+    // Prevent sending to self
+    if (senderId === receiverId) {
+      return res.status(400).json({ error: 'Cannot send money to yourself' });
+    }
     
     // Check sender's balance
     const senderWallet = await Wallet.findById(sender.walletId);
-    if (senderWallet.balance < amount * 100) { // Convert to cents
+    if (!senderWallet || senderWallet.balance < amount * 100) { // Convert to cents
       return res.status(400).json({ error: 'Insufficient balance' });
     }
     
@@ -40,27 +53,106 @@ router.post('/send', authMiddleware, async (req, res) => {
       type: 'peer-to-peer',
       description,
       status: 'completed',
-      method: 'internal',
+      method: method, // Track the method used (username, qr, or nfc)
     });
     
     await transaction.save();
+    
+    // Populate sender and receiver details
+    await transaction.populate('sender', 'firstName lastName username profilePicture');
+    await transaction.populate('receiver', 'firstName lastName username profilePicture');
     
     // Update balances
     senderWallet.balance -= amount * 100;
     await senderWallet.save();
     
     const receiverWallet = await Wallet.findById(receiver.walletId);
-    receiverWallet.balance += amount * 100;
-    await receiverWallet.save();
-    
+    if (receiverWallet) {
+      receiverWallet.balance += amount * 100;
+      await receiverWallet.save();
+    }
+
     res.json({
       success: true,
       transactionId: transaction._id,
       message: 'Payment sent successfully',
+      transaction: {
+        id: transaction._id,
+        sender: {
+          _id: sender._id,
+          firstName: sender.firstName,
+          lastName: sender.lastName,
+          username: sender.username,
+          profilePicture: sender.profilePicture
+        },
+        receiver: {
+          _id: receiver._id,
+          firstName: receiver.firstName,
+          lastName: receiver.lastName,
+          username: receiver.username,
+          profilePicture: receiver.profilePicture
+        },
+        amount: amount,
+        currency,
+        status: transaction.status,
+        method,
+        createdAt: transaction.createdAt
+      }
     });
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: 'Payment failed' });
+  }
+});
+
+// Lookup user by username, phone, or userId for transfer
+router.get('/lookup/:identifier', authMiddleware, async (req, res) => {
+  try {
+    const { identifier } = req.params;
+    const currentUserId = req.userId;
+
+    if (!identifier || identifier.length < 2) {
+      return res.status(400).json({ error: 'Please provide at least 2 characters' });
+    }
+
+    // Search by username (primary), phone, or userId
+    const user = await User.findOne({
+      $or: [
+        { username: { $regex: identifier, $options: 'i' } },
+        { phone: { $regex: identifier, $options: 'i' } },
+        { _id: identifier }
+      ]
+    }).select('_id firstName lastName username phone email profilePicture accountStatus');
+
+    if (!user) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+
+    // Cannot send to self
+    if (user._id.toString() === currentUserId) {
+      return res.status(400).json({ error: 'Cannot send money to yourself' });
+    }
+
+    // Cannot send to suspended users
+    if (user.accountStatus === 'suspended') {
+      return res.status(400).json({ error: 'This account is suspended' });
+    }
+
+    res.json({
+      success: true,
+      user: {
+        _id: user._id,
+        firstName: user.firstName,
+        lastName: user.lastName,
+        username: user.username,
+        phone: user.phone,
+        email: user.email,
+        profilePicture: user.profilePicture
+      }
+    });
+  } catch (err) {
+    console.error('User lookup error:', err);
+    res.status(500).json({ error: 'Failed to lookup user' });
   }
 });
 

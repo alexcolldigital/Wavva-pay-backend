@@ -326,7 +326,7 @@ router.post('/friends/add', authMiddleware, async (req, res) => {
 router.get('/friends', authMiddleware, async (req, res) => {
   try {
     const user = await User.findById(req.userId)
-      .populate('friends', 'firstName lastName profilePicture email phone');
+      .populate('friends', 'firstName lastName username profilePicture email phone');
 
     res.json(user.friends);
   } catch (err) {
