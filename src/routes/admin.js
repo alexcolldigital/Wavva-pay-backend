@@ -145,6 +145,73 @@ router.get('/transactions/analytics', authMiddleware, adminMiddleware, async (re
   }
 });
 
+// Get all transactions (admin view with pagination and filters)
+router.get('/transactions', authMiddleware, adminMiddleware, async (req, res) => {
+  try {
+    const { page = 1, limit = 50, status, type, search, sortBy = 'createdAt', sortOrder = 'desc' } = req.query;
+    
+    const query = {};
+    
+    if (status) {
+      query.status = status;
+    }
+    
+    if (type) {
+      query.type = type;
+    }
+    
+    if (search) {
+      query.$or = [
+        { description: { $regex: search, $options: 'i' } },
+        { transactionId: { $regex: search, $options: 'i' } },
+      ];
+    }
+    
+    const pageNum = parseInt(page);
+    const limitNum = parseInt(limit);
+    const skip = (pageNum - 1) * limitNum;
+    
+    // Build sort object
+    const sortObj = {};
+    sortObj[sortBy] = sortOrder === 'asc' ? 1 : -1;
+    
+    const transactions = await Transaction.find(query)
+      .populate('sender', 'firstName lastName email username profilePicture')
+      .populate('receiver', 'firstName lastName email username profilePicture')
+      .populate('combineId', 'name')
+      .sort(sortObj)
+      .limit(limitNum)
+      .skip(skip);
+    
+    const total = await Transaction.countDocuments(query);
+    
+    // Get transaction statistics
+    const stats = await Transaction.aggregate([
+      { $match: query },
+      {
+        $group: {
+          _id: '$status',
+          count: { $sum: 1 },
+          totalAmount: { $sum: '$amount' },
+        }
+      }
+    ]);
+    
+    res.json({
+      success: true,
+      transactions,
+      total,
+      page: pageNum,
+      limit: limitNum,
+      pages: Math.ceil(total / limitNum),
+      stats
+    });
+  } catch (err) {
+    logger.error('Transaction fetch failed', err.message);
+    res.status(500).json({ success: false, error: 'Failed to fetch transactions' });
+  }
+});
+
 // Suspend user account
 router.post('/users/:userId/suspend', authMiddleware, adminMiddleware, async (req, res) => {
   try {

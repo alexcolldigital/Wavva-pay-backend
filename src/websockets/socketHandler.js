@@ -181,6 +181,27 @@ function setupSocketHandlers(io) {
     });
 
     /**
+     * Generic Room Join (for real-time features)
+     */
+    socket.on('join_room', (room) => {
+      if (userRole !== 'admin' && !room.includes('nfc')) {
+        socket.emit('error', { message: 'Unauthorized for this room' });
+        return;
+      }
+
+      socket.join(room);
+      logger.info(`User joined room: ${room}`, { userId, socketId: socket.id });
+    });
+
+    /**
+     * Generic Room Leave
+     */
+    socket.on('leave_room', (room) => {
+      socket.leave(room);
+      logger.info(`User left room: ${room}`, { userId, socketId: socket.id });
+    });
+
+    /**
      * Disconnect
      */
     socket.on('disconnect', () => {
@@ -283,11 +304,113 @@ function broadcastUsersUpdate(io, users) {
   io.to('admin_users').emit('admin:users-update', users);
 }
 
+/**
+ * Broadcast new transaction to admin dashboard
+ */
+function broadcastNewTransaction(io, transaction) {
+  io.to('admin_transactions').emit('transaction:created', {
+    id: transaction._id,
+    sender: {
+      _id: transaction.sender._id,
+      firstName: transaction.sender.firstName,
+      lastName: transaction.sender.lastName,
+      username: transaction.sender.username,
+      email: transaction.sender.email,
+      profilePicture: transaction.sender.profilePicture
+    },
+    receiver: {
+      _id: transaction.receiver._id,
+      firstName: transaction.receiver.firstName,
+      lastName: transaction.receiver.lastName,
+      username: transaction.receiver.username,
+      email: transaction.receiver.email,
+      profilePicture: transaction.receiver.profilePicture
+    },
+    amount: transaction.amount,
+    currency: transaction.currency,
+    status: transaction.status,
+    type: transaction.type,
+    description: transaction.description,
+    createdAt: transaction.createdAt,
+    updatedAt: transaction.updatedAt
+  });
+}
+
+/**
+ * Broadcast transaction status update to admin dashboard
+ */
+function broadcastTransactionUpdate(io, transaction) {
+  io.to('admin_transactions').emit('transaction:updated', {
+    id: transaction._id,
+    sender: {
+      _id: transaction.sender._id,
+      firstName: transaction.sender.firstName,
+      lastName: transaction.sender.lastName,
+      username: transaction.sender.username,
+      email: transaction.sender.email,
+      profilePicture: transaction.sender.profilePicture
+    },
+    receiver: {
+      _id: transaction.receiver._id,
+      firstName: transaction.receiver.firstName,
+      lastName: transaction.receiver.lastName,
+      username: transaction.receiver.username,
+      email: transaction.receiver.email,
+      profilePicture: transaction.receiver.profilePicture
+    },
+    amount: transaction.amount,
+    currency: transaction.currency,
+    status: transaction.status,
+    type: transaction.type,
+    description: transaction.description,
+    createdAt: transaction.createdAt,
+    updatedAt: transaction.updatedAt
+  });
+}
+
+/**
+ * Broadcast transaction refund to admin dashboard
+ */
+function broadcastTransactionRefund(io, refund, originalTransaction) {
+  io.to('admin_transactions').emit('transaction:refunded', {
+    refund: {
+      id: refund._id,
+      sender: {
+        _id: refund.sender._id,
+        firstName: refund.sender.firstName,
+        lastName: refund.sender.lastName,
+        username: refund.sender.username,
+        email: refund.sender.email,
+        profilePicture: refund.sender.profilePicture
+      },
+      receiver: {
+        _id: refund.receiver._id,
+        firstName: refund.receiver.firstName,
+        lastName: refund.receiver.lastName,
+        username: refund.receiver.username,
+        email: refund.receiver.email,
+        profilePicture: refund.receiver.profilePicture
+      },
+      amount: refund.amount,
+      currency: refund.currency,
+      status: refund.status,
+      type: refund.type,
+      description: refund.description,
+      createdAt: refund.createdAt,
+      updatedAt: refund.updatedAt
+    },
+    originalTransactionId: originalTransaction._id
+  });
+}
+
 module.exports = {
   setupSocketHandlers,
   broadcastAdminStatsUpdate,
   broadcastNewUser,
   broadcastFraudAlert,
   broadcastUserStatusUpdate,
-  broadcastUsersUpdate
+  broadcastUsersUpdate,
+  broadcastNewTransaction,
+  broadcastTransactionUpdate,
+  broadcastTransactionRefund
 };
