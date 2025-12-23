@@ -646,7 +646,7 @@ router.post('/reset-password', async (req, res) => {
  *   post:
  *     tags:
  *       - Authentication
- *     summary: Send email verification code (8 digits)
+ *     summary: Send email verification code (6 digits)
  *     requestBody:
  *       required: true
  *       content:
@@ -693,7 +693,7 @@ router.post('/send-email-verification-code', async (req, res) => {
  *   post:
  *     tags:
  *       - Authentication
- *     summary: Verify email with 8-digit code
+ *     summary: Verify email with 6-digit code
  *     requestBody:
  *       required: true
  *       content:

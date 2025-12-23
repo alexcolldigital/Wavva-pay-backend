@@ -129,10 +129,10 @@ const sendEmailVerification = async (user) => {
   }
 };
 
-// Send email verification code (8-digit code)
+// Send email verification code (6-digit code)
 const sendEmailVerificationCode = async (user) => {
   try {
-    const code = Math.floor(10000000 + Math.random() * 90000000).toString();
+    const code = Math.floor(100000 + Math.random() * 900000).toString();
     const expiryMinutes = 15;
     
     user.emailVerificationCode = code;
