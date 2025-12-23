@@ -3,12 +3,24 @@ const express = require('express');
 const http = require('http');
 const cors = require('cors');
 const helmet = require('helmet');
+const mongoose = require('mongoose');
 const { Server } = require('socket.io');
 const logger = require('./utils/logger');
 const { setupSocketHandlers } = require('./websockets/socketHandler');
 
 const app = express();
 const server = http.createServer(app);
+
+// Connect to MongoDB
+const mongoURI = process.env.MONGODB_URI || 'mongodb://localhost:27017/wavva-pay';
+mongoose.connect(mongoURI)
+  .then(() => {
+    logger.info('✅ MongoDB connected successfully');
+  })
+  .catch((err) => {
+    logger.error('❌ MongoDB connection failed:', err.message);
+    // Continue anyway - don't crash the server
+  });
 
 // Initialize Socket.IO
 const io = new Server(server, {
