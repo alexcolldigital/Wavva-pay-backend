@@ -1,131 +1,104 @@
 require('dotenv').config();
 const express = require('express');
-const { syncDatabase } = require('./models/index_SQL');
+const http = require('http');
 const cors = require('cors');
 const helmet = require('helmet');
+const { Server } = require('socket.io');
 const logger = require('./utils/logger');
-const swaggerUi = require('swagger-ui-express');
-const swaggerSpec = require('../swagger');
-const path = require('path');
+const { setupSocketHandlers } = require('./websockets/socketHandler');
 
 const app = express();
+const server = http.createServer(app);
 
-// Parse allowed origins from environment variable
-const allowedOrigins = (process.env.ALLOWED_ORIGINS || 'http://localhost:5173,http://localhost:8081,http://localhost:3000,https://wavvapay.vercel.app').split(',').map(origin => origin.trim());
-logger.info('CORS allowed origins:', allowedOrigins);
+// Initialize Socket.IO
+const io = new Server(server, {
+  cors: {
+    origin: process.env.CLIENT_URL || 'http://localhost:5173',
+    credentials: true
+  }
+});
 
-// Security middleware
+// Middleware
 app.use(helmet());
 app.use(cors({
-  origin: allowedOrigins,
-  credentials: true,
-  methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization'],
+  origin: process.env.CLIENT_URL || 'http://localhost:5173',
+  credentials: true
 }));
-app.use(express.json({ limit: '10kb' }));
-app.use(express.urlencoded({ extended: true, limit: '10kb' }));
+app.use(express.json({ limit: '10mb' }));
+app.use(express.urlencoded({ limit: '10mb', extended: true }));
 
-// Static file serving for uploads
-app.use('/uploads', express.static(path.join(__dirname, '../uploads')));
+// Setup Socket.IO handlers
+setupSocketHandlers(io);
 
-// Rate limiting and validation middleware
-const { apiLimiter } = require('./middleware/rateLimiter');
-const { inputValidator } = require('./middleware/validation');
+// Routes
+app.use('/api/auth', require('./routes/auth'));
+app.use('/api/users', require('./routes/users'));
+app.use('/api/wallets', require('./routes/wallets'));
+app.use('/api/transactions', require('./routes/transactions'));
+app.use('/api/combines', require('./routes/combines'));
+app.use('/api/payments', require('./routes/payments'));
+app.use('/api/admin', require('./routes/admin'));
 
-// Apply middleware
-app.use(apiLimiter);
-app.use(inputValidator);
+// Health check endpoint
+app.get('/health', (req, res) => {
+  console.log('[health] Received request');
+  res.json({ status: 'ok', timestamp: new Date() });
+});
 
-// Request logging middleware
+// Make io accessible to routes
 app.use((req, res, next) => {
-  logger.debug(`${req.method} ${req.path}`, { ip: req.ip });
+  req.io = io;
   next();
 });
 
-// Database connection - MySQL with Sequelize
-(async () => {
-  try {
-    // Sync database (create tables if they don't exist)
-    await syncDatabase(false); // false = alter tables, true = drop and recreate
-    
-    logger.info('✅ MySQL Database connected and synchronized');
-    
-    // Swagger documentation
-    app.use('/api-docs', swaggerUi.serve, swaggerUi.setup(swaggerSpec));
-
-    // Routes
-    app.use('/api/auth', require('./routes/auth'));
-    app.use('/api/users', require('./routes/users'));
-    app.use('/api/payments', require('./routes/payments'));
-    app.use('/api/combines', require('./routes/combines'));
-    app.use('/api/transactions', require('./routes/transactions'));
-    app.use('/api/wallets', require('./routes/wallets'));
-    app.use('/api/admin', require('./routes/admin'));
-    app.use('/api/webhooks', require('./webhooks/chimoney'));
-
-    // Health check
-    app.get('/health', (req, res) => {
-      res.json({
-        status: 'ok',
-        timestamp: new Date().toISOString(),
-        uptime: process.uptime(),
-        environment: process.env.NODE_ENV,
-        database: 'MySQL',
-      });
-    });
-
-    // 404 handler
-    app.use((req, res) => {
-      logger.warn(`Route not found: ${req.method} ${req.path}`);
-      res.status(404).json({ error: 'Route not found' });
-    });
-
-    // Error handling middleware
-    app.use((err, req, res, next) => {
-      logger.error('Unhandled error', {
-        message: err.message,
-        stack: err.stack,
-        url: req.originalUrl,
-        method: req.method,
-      });
-
-      res.status(err.status || 500).json({
-        error: process.env.NODE_ENV === 'production'
-          ? 'Internal server error'
-          : err.message,
-        ...(process.env.NODE_ENV === 'development' && { stack: err.stack }),
-      });
-    });
-
-    const PORT = process.env.PORT || 5000;
-    const server = app.listen(PORT, () => {
-      logger.info(`🚀 Server running on port ${PORT}`);
-      logger.info(`📚 Environment: ${process.env.NODE_ENV}`);
-      logger.info(`🔒 Security: CORS enabled, Helmet activated`);
-      logger.info(`💾 Database: MySQL`);
-    });
-
-    // Graceful shutdown
-    process.on('SIGTERM', () => {
-      logger.info('SIGTERM signal received: closing HTTP server');
-      server.close(async () => {
-        logger.info('HTTP server closed');
-        process.exit(0);
-      });
-    });
-  } catch (error) {
-    logger.error('❌ Database connection or initialization failed:', error.message);
-    logger.warn('💡 Make sure MySQL is running and credentials are correct in .env');
-    console.error('Error details:', error);
-    process.exit(1);
-  }
-})();
-
-process.on('unhandledRejection', (reason, promise) => {
-  logger.error('Unhandled Rejection at:', {
-    promise,
-    reason: reason.message || reason,
+// Error handling middleware
+app.use((err, req, res, next) => {
+  logger.error('Unhandled error', err.message);
+  res.status(err.status || 500).json({
+    error: err.message || 'Internal server error'
   });
 });
 
-module.exports = app;
+// 404 handler
+app.use((req, res) => {
+  res.status(404).json({ error: 'Route not found' });
+});
+
+// Start server
+const PORT = process.env.PORT || 8000;
+server.listen(PORT, () => {
+  console.log(`✅ Server running on port ${PORT}`);
+  console.log(`📡 WebSocket server ready`);
+  logger.info(`Server started on port ${PORT}`);
+});
+
+// Graceful shutdown
+process.on('SIGTERM', () => {
+  logger.info('SIGTERM signal received: closing HTTP server');
+  server.close(() => {
+    logger.info('HTTP server closed');
+    process.exit(0);
+  });
+});
+
+process.on('SIGINT', () => {
+  logger.info('SIGINT signal received: closing HTTP server');
+  server.close(() => {
+    logger.info('HTTP server closed');
+    process.exit(0);
+  });
+});
+
+// Error handlers
+process.on('uncaughtException', (err) => {
+  logger.error('UNCAUGHT EXCEPTION', err.message);
+  console.error('UNCAUGHT EXCEPTION:', err);
+});
+
+process.on('unhandledRejection', (reason) => {
+  logger.error('UNHANDLED REJECTION', reason);
+  console.error('UNHANDLED REJECTION:', reason);
+});
+
+module.exports = { app, server, io };
+

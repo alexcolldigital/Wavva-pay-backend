@@ -52,18 +52,17 @@ const router = express.Router();
  *               $ref: '#/components/schemas/Error'
  */
 router.post('/signup', async (req, res) => {
+  console.log('[DEBUG] Signup route hit');
   try {
     const { firstName, lastName, email, phone, password } = req.body;
     
-    console.log('[DEBUG] Signup request received:', { firstName, email, body: JSON.stringify(req.body) });
+    console.log('[DEBUG] Signup request received:', { firstName, lastName, email });
     
     // Validation
-    if (!firstName || !email || !password) {
-      const details = { firstName: !!firstName, email: !!email, password: !!password };
-      console.log('[DEBUG] Validation failed:', details);
+    if (!firstName || !lastName || !email || !password) {
+      console.log('[DEBUG] Validation failed');
       return res.status(400).json({ 
-        error: 'Missing required fields. Required: firstName, email, password',
-        details
+        error: 'Missing required fields. Required: firstName, lastName, email, password'
       });
     }
     
@@ -85,38 +84,50 @@ router.post('/signup', async (req, res) => {
     }
     
     // Check if user exists
+    console.log('[DEBUG] Checking if user exists:', email);
     const existing = await User.findOne({ $or: [{ email }, { phone }] });
     if (existing) {
       console.log('[DEBUG] User already exists:', email);
       return res.status(400).json({ error: 'User already exists' });
     }
     
-    // Create user
+    console.log('[DEBUG] Creating user');
     const user = new User({
       firstName,
       lastName,
       email,
       phone,
       passwordHash: password,
-      qrCodeData: `wavva_pay_${email}_${Date.now()}`, // Unique QR code
+      qrCodeData: `wavva_pay_${email}_${Date.now()}`,
     });
     
+    console.log('[DEBUG] Saving user...');
     await user.save();
-    console.log('[DEBUG] User saved:', user._id);
+    console.log('[DEBUG] User saved');
     
-    // Create wallet
+    console.log('[DEBUG] Creating wallet...');
     const wallet = new Wallet({ userId: user._id });
     await wallet.save();
+    console.log('[DEBUG] Wallet created');
     
     user.walletId = wallet._id;
+    console.log('[DEBUG] Saving wallet reference...');
     await user.save();
+    console.log('[DEBUG] Wallet reference saved');
     
     // Send email verification code
-    await sendEmailVerificationCode(user);
+    console.log('[DEBUG] Sending email...');
+    try {
+      await sendEmailVerificationCode(user);
+      console.log('[DEBUG] Email sent');
+    } catch (emailErr) {
+      console.error('[WARN] Email failed:', emailErr.message);
+    }
     
-    // Generate token pair (access + refresh)
+    console.log('[DEBUG] Generating tokens...');
     const { accessToken, refreshToken } = generateTokenPair(user._id);
     
+    console.log('[DEBUG] Sending response...');
     res.json({
       accessToken,
       refreshToken,
@@ -132,13 +143,14 @@ router.post('/signup', async (req, res) => {
         isAdmin: user.isAdmin || false,
         createdAt: user.createdAt
       },
-      message: 'Signup successful. Please verify your email with the code sent to your inbox.',
+      message: 'Signup successful',
     });
+    console.log('[DEBUG] Response sent');
   } catch (err) {
-    console.error('[ERROR] Signup error:', err.message, err.stack);
+    console.error('[ERROR] Signup error:', err.message);
+    console.error('[ERROR] Stack:', err.stack);
     res.status(500).json({ 
-      error: err.message || 'Signup failed',
-      code: err.code
+      error: err.message || 'Signup failed'
     });
   }
 });
@@ -671,6 +683,238 @@ router.post('/logout', async (req, res) => {
   } catch (err) {
     logger.error('Logout failed', err.message);
     res.status(500).json({ error: 'Logout failed' });
+  }
+});
+
+/**
+ * @swagger
+ * /auth/pin-status:
+ *   get:
+ *     tags:
+ *       - PIN Management
+ *     summary: Check if user has PIN set
+ *     security:
+ *       - bearerAuth: []
+ *     responses:
+ *       200:
+ *         description: PIN status retrieved
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 isSet:
+ *                   type: boolean
+ */
+router.get('/pin-status', async (req, res) => {
+  try {
+    const token = req.headers.authorization?.split(' ')[1];
+    if (!token) return res.status(401).json({ error: 'No token provided' });
+    
+    const decoded = jwt.verify(token, process.env.JWT_SECRET || 'secret');
+    const user = await User.findById(decoded.userId);
+    
+    if (!user) return res.status(404).json({ error: 'User not found' });
+    
+    res.json({ isSet: !!user.pin });
+  } catch (err) {
+    logger.error('PIN status check failed', err.message);
+    res.status(401).json({ error: 'Invalid token' });
+  }
+});
+
+/**
+ * @swagger
+ * /auth/set-pin:
+ *   post:
+ *     tags:
+ *       - PIN Management
+ *     summary: Set up a new transaction PIN
+ *     security:
+ *       - bearerAuth: []
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             properties:
+ *               pin:
+ *                 type: string
+ *                 description: 4-digit PIN
+ *     responses:
+ *       200:
+ *         description: PIN set successfully
+ */
+router.post('/set-pin', async (req, res) => {
+  try {
+    const token = req.headers.authorization?.split(' ')[1];
+    if (!token) return res.status(401).json({ error: 'No token provided' });
+    
+    const decoded = jwt.verify(token, process.env.JWT_SECRET || 'secret');
+    const { pin } = req.body;
+    
+    // Validate PIN
+    if (!pin || pin.length !== 4 || !/^\d+$/.test(pin)) {
+      return res.status(400).json({ error: 'PIN must be 4 digits' });
+    }
+    
+    const user = await User.findById(decoded.userId);
+    if (!user) return res.status(404).json({ error: 'User not found' });
+    
+    if (user.pin) {
+      return res.status(400).json({ error: 'PIN already set. Use change-pin endpoint' });
+    }
+    
+    user.pin = pin;
+    await user.save();
+    
+    logger.info('PIN set successfully', { userId: user._id });
+    res.json({ success: true, message: 'PIN set successfully' });
+  } catch (err) {
+    logger.error('Set PIN failed', err.message);
+    res.status(500).json({ error: 'Failed to set PIN' });
+  }
+});
+
+/**
+ * @swagger
+ * /auth/verify-pin:
+ *   post:
+ *     tags:
+ *       - PIN Management
+ *     summary: Verify PIN for transactions
+ *     security:
+ *       - bearerAuth: []
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             properties:
+ *               pin:
+ *                 type: string
+ *                 description: 4-digit PIN
+ *     responses:
+ *       200:
+ *         description: PIN verified
+ */
+router.post('/verify-pin', async (req, res) => {
+  try {
+    const token = req.headers.authorization?.split(' ')[1];
+    if (!token) return res.status(401).json({ error: 'No token provided' });
+    
+    const decoded = jwt.verify(token, process.env.JWT_SECRET || 'secret');
+    const { pin } = req.body;
+    
+    // Validate PIN
+    if (!pin || pin.length !== 4 || !/^\d+$/.test(pin)) {
+      return res.status(400).json({ error: 'PIN must be 4 digits' });
+    }
+    
+    const user = await User.findById(decoded.userId);
+    if (!user) return res.status(404).json({ error: 'User not found' });
+    
+    // Check if account is locked
+    if (user.pinLockedUntil && new Date() < user.pinLockedUntil) {
+      return res.status(429).json({ error: 'PIN locked. Try again later' });
+    }
+    
+    // Check PIN
+    const isValid = await user.comparePin(pin);
+    
+    if (!isValid) {
+      user.pinAttempts = (user.pinAttempts || 0) + 1;
+      
+      // Lock after 3 failed attempts
+      if (user.pinAttempts >= 3) {
+        user.pinLockedUntil = new Date(Date.now() + 15 * 60 * 1000); // 15 minutes
+        user.pinAttempts = 0;
+      }
+      
+      await user.save();
+      return res.status(400).json({ error: 'Invalid PIN' });
+    }
+    
+    // Reset attempts on success
+    user.pinAttempts = 0;
+    user.pinLockedUntil = null;
+    await user.save();
+    
+    logger.info('PIN verified successfully', { userId: user._id });
+    res.json({ success: true, message: 'PIN verified' });
+  } catch (err) {
+    logger.error('Verify PIN failed', err.message);
+    res.status(500).json({ error: 'Failed to verify PIN' });
+  }
+});
+
+/**
+ * @swagger
+ * /auth/change-pin:
+ *   post:
+ *     tags:
+ *       - PIN Management
+ *     summary: Change existing transaction PIN
+ *     security:
+ *       - bearerAuth: []
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             properties:
+ *               oldPin:
+ *                 type: string
+ *                 description: Current 4-digit PIN
+ *               newPin:
+ *                 type: string
+ *                 description: New 4-digit PIN
+ *     responses:
+ *       200:
+ *         description: PIN changed successfully
+ */
+router.post('/change-pin', async (req, res) => {
+  try {
+    const token = req.headers.authorization?.split(' ')[1];
+    if (!token) return res.status(401).json({ error: 'No token provided' });
+    
+    const decoded = jwt.verify(token, process.env.JWT_SECRET || 'secret');
+    const { oldPin, newPin } = req.body;
+    
+    // Validate inputs
+    if (!oldPin || oldPin.length !== 4 || !/^\d+$/.test(oldPin)) {
+      return res.status(400).json({ error: 'Current PIN must be 4 digits' });
+    }
+    
+    if (!newPin || newPin.length !== 4 || !/^\d+$/.test(newPin)) {
+      return res.status(400).json({ error: 'New PIN must be 4 digits' });
+    }
+    
+    if (oldPin === newPin) {
+      return res.status(400).json({ error: 'New PIN must be different from current PIN' });
+    }
+    
+    const user = await User.findById(decoded.userId);
+    if (!user) return res.status(404).json({ error: 'User not found' });
+    
+    // Verify old PIN
+    const isValid = await user.comparePin(oldPin);
+    if (!isValid) {
+      return res.status(400).json({ error: 'Current PIN is incorrect' });
+    }
+    
+    // Set new PIN
+    user.pin = newPin;
+    await user.save();
+    
+    logger.info('PIN changed successfully', { userId: user._id });
+    res.json({ success: true, message: 'PIN changed successfully' });
+  } catch (err) {
+    logger.error('Change PIN failed', err.message);
+    res.status(500).json({ error: 'Failed to change PIN' });
   }
 });
 
