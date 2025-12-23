@@ -71,7 +71,7 @@ const emailTemplates = {
     <html>
       <body style="font-family: Arial, sans-serif; background-color: #000; color: #fff;">
         <div style="max-width: 600px; margin: 0 auto; padding: 20px;">
-          <h2 style="color: #39FF14;">💰 Payment Confirmed</h2>
+          <h2 style="color: #39FF14;"> Payment Confirmed</h2>
           <p>You sent <strong>${amount} ${currency}</strong> to <strong>${receiver.firstName} ${receiver.lastName}</strong></p>
           <div style="background-color: #1a1a1a; padding: 15px; border-radius: 5px; margin: 20px 0; border-left: 4px solid #39FF14;">
             <p><strong>Transaction ID:</strong></p>

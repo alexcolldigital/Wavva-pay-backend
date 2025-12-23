@@ -115,14 +115,35 @@ router.get('/lookup/:identifier', authMiddleware, async (req, res) => {
       return res.status(400).json({ error: 'Please provide at least 2 characters' });
     }
 
-    // Search by username (primary), phone, or userId
-    const user = await User.findOne({
-      $or: [
-        { username: { $regex: identifier, $options: 'i' } },
-        { phone: { $regex: identifier, $options: 'i' } },
-        { _id: identifier }
-      ]
-    }).select('_id firstName lastName username phone email profilePicture accountStatus');
+    console.log('Looking up user with identifier:', identifier);
+
+    // Try to match by exact username first, then phone, then userId
+    let user = await User.findOne({ username: identifier }).select('_id firstName lastName username phone email profilePicture accountStatus');
+    
+    if (!user) {
+      user = await User.findOne({ phone: identifier }).select('_id firstName lastName username phone email profilePicture accountStatus');
+    }
+    
+    if (!user && identifier.length === 24) {
+      // Try as MongoDB ObjectId
+      try {
+        user = await User.findById(identifier).select('_id firstName lastName username phone email profilePicture accountStatus');
+      } catch (e) {
+        // Invalid ObjectId format
+      }
+    }
+    
+    if (!user) {
+      // Try regex search for username and phone
+      user = await User.findOne({
+        $or: [
+          { username: { $regex: identifier, $options: 'i' } },
+          { phone: { $regex: identifier, $options: 'i' } }
+        ]
+      }).select('_id firstName lastName username phone email profilePicture accountStatus');
+    }
+
+    console.log('User found:', user ? user._id : 'no user');
 
     if (!user) {
       return res.status(404).json({ error: 'User not found' });
@@ -151,8 +172,9 @@ router.get('/lookup/:identifier', authMiddleware, async (req, res) => {
       }
     });
   } catch (err) {
-    console.error('User lookup error:', err);
-    res.status(500).json({ error: 'Failed to lookup user' });
+    console.error('User lookup error:', err.message);
+    console.error('Full error:', err);
+    res.status(500).json({ error: 'Failed to lookup user', details: err.message });
   }
 });
 
