@@ -149,8 +149,10 @@ router.post('/signup', async (req, res) => {
   } catch (err) {
     console.error('[ERROR] Signup error:', err.message);
     console.error('[ERROR] Stack:', err.stack);
+    console.error('[ERROR] Full error:', err);
     res.status(500).json({ 
-      error: err.message || 'Signup failed'
+      error: err.message || 'Signup failed',
+      details: process.env.NODE_ENV === 'development' ? err.stack : undefined
     });
   }
 });
