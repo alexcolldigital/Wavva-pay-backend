@@ -168,6 +168,19 @@ function setupSocketHandlers(io) {
     });
 
     /**
+     * Admin Users - Subscribe to updates
+     */
+    socket.on('admin:subscribe-users', () => {
+      if (userRole !== 'admin') {
+        socket.emit('error', { message: 'Unauthorized' });
+        return;
+      }
+
+      socket.join('admin_users');
+      logger.info('Admin subscribed to user updates', { userId, socketId: socket.id });
+    });
+
+    /**
      * Disconnect
      */
     socket.on('disconnect', () => {
@@ -252,9 +265,29 @@ function broadcastFraudAlert(io, alert) {
   io.to('admin_dashboard').emit('admin:fraud-alert', alert);
 }
 
+/**
+ * Emit user status update to admins
+ */
+function broadcastUserStatusUpdate(io, userId, status) {
+  io.to('admin_users').emit('admin:user-status-update', {
+    userId,
+    status,
+    timestamp: new Date()
+  });
+}
+
+/**
+ * Emit user list update to admins
+ */
+function broadcastUsersUpdate(io, users) {
+  io.to('admin_users').emit('admin:users-update', users);
+}
+
 module.exports = {
   setupSocketHandlers,
   broadcastAdminStatsUpdate,
   broadcastNewUser,
-  broadcastFraudAlert
+  broadcastFraudAlert,
+  broadcastUserStatusUpdate,
+  broadcastUsersUpdate
 };

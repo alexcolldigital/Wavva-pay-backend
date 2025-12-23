@@ -4,6 +4,7 @@ const User = require('../models/User');
 const Transaction = require('../models/Transaction');
 const Wallet = require('../models/Wallet');
 const logger = require('../utils/logger');
+const { broadcastUserStatusUpdate } = require('../websockets/socketHandler');
 const router = express.Router();
 
 // Admin verification middleware
@@ -246,6 +247,89 @@ router.get('/fraud-alerts', authMiddleware, adminMiddleware, async (req, res) =>
   } catch (err) {
     logger.error('Fraud alert fetch failed', err.message);
     res.status(500).json({ error: 'Failed to fetch fraud alerts' });
+  }
+});
+
+// Suspend user
+router.post('/users/:userId/suspend', authMiddleware, adminMiddleware, async (req, res) => {
+  try {
+    const { userId } = req.params;
+    const { reason } = req.body;
+
+    const user = await User.findByIdAndUpdate(
+      userId,
+      {
+        accountStatus: 'suspended',
+        suspendedReason: reason,
+        suspendedAt: new Date(),
+      },
+      { new: true }
+    );
+
+    if (!user) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+
+    logger.info(`User suspended: ${userId}`, { reason });
+
+    // Broadcast to admin clients
+    if (req.io) {
+      req.io.to('admin_users').emit('admin:user-status-update', {
+        userId,
+        status: 'suspended',
+        timestamp: new Date()
+      });
+    }
+
+    res.json({
+      success: true,
+      message: `User ${user.firstName} ${user.lastName} has been suspended`,
+      user,
+    });
+  } catch (err) {
+    logger.error('User suspension failed', err.message);
+    res.status(500).json({ error: 'Failed to suspend user' });
+  }
+});
+
+// Unsuspend user
+router.post('/users/:userId/unsuspend', authMiddleware, adminMiddleware, async (req, res) => {
+  try {
+    const { userId } = req.params;
+
+    const user = await User.findByIdAndUpdate(
+      userId,
+      {
+        accountStatus: 'active',
+        suspendedReason: undefined,
+        suspendedAt: undefined,
+      },
+      { new: true }
+    );
+
+    if (!user) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+
+    logger.info(`User unsuspended: ${userId}`);
+
+    // Broadcast to admin clients
+    if (req.io) {
+      req.io.to('admin_users').emit('admin:user-status-update', {
+        userId,
+        status: 'active',
+        timestamp: new Date()
+      });
+    }
+
+    res.json({
+      success: true,
+      message: `User ${user.firstName} ${user.lastName} has been unsuspended`,
+      user,
+    });
+  } catch (err) {
+    logger.error('User unsuspension failed', err.message);
+    res.status(500).json({ error: 'Failed to unsuspend user' });
   }
 });
 
