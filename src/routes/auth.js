@@ -56,55 +56,142 @@ router.post('/signup', async (req, res) => {
   console.log('[DEBUG] Request body:', req.body);
   
   try {
-    const { firstName, lastName, email, phone, password } = req.body;
+    const { firstName, lastName, username, email, phone, password } = req.body;
     
-    console.log('[DEBUG] Signup request received:', { firstName, lastName, email });
+    console.log('[DEBUG] Signup request received:', { firstName, lastName, username, email, phone });
     
-    // Validation
-    if (!firstName || !lastName || !email || !password) {
-      console.log('[DEBUG] Validation failed - missing fields');
-      return res.status(400).json({ 
+    // Validate each field individually
+    const errors = {};
+    
+    // Validate firstName
+    if (!firstName || firstName.trim() === '') {
+      errors.firstName = 'First name is required';
+      console.log('[VALIDATION] First name missing');
+    } else if (firstName.length < 2) {
+      errors.firstName = 'First name must be at least 2 characters';
+      console.log('[VALIDATION] First name too short');
+    }
+    
+    // Validate lastName
+    if (!lastName || lastName.trim() === '') {
+      errors.lastName = 'Last name is required';
+      console.log('[VALIDATION] Last name missing');
+    } else if (lastName.length < 2) {
+      errors.lastName = 'Last name must be at least 2 characters';
+      console.log('[VALIDATION] Last name too short');
+    }
+    
+    // Validate username
+    if (!username || username.trim() === '') {
+      errors.username = 'Username is required';
+      console.log('[VALIDATION] Username missing');
+    } else if (username.length < 3) {
+      errors.username = 'Username must be at least 3 characters';
+      console.log('[VALIDATION] Username too short');
+    } else if (username.length > 20) {
+      errors.username = 'Username must be less than 20 characters';
+      console.log('[VALIDATION] Username too long');
+    } else if (!/^[a-zA-Z0-9_-]+$/.test(username)) {
+      errors.username = 'Username can only contain letters, numbers, underscores, and hyphens';
+      console.log('[VALIDATION] Invalid username format:', username);
+    }
+    
+    // Validate email
+    if (!email || email.trim() === '') {
+      errors.email = 'Email address is required';
+      console.log('[VALIDATION] Email missing');
+    } else {
+      const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+      if (!emailRegex.test(email)) {
+        errors.email = `Invalid email format: "${email}". Please enter a valid email address.`;
+        console.log('[VALIDATION] Invalid email format:', email);
+      }
+    }
+    
+    // Validate phone (optional but if provided should be valid)
+    if (phone && phone.trim() !== '') {
+      const phoneRegex = /^\+?[1-9]\d{1,14}$/; // E.164 format
+      if (!phoneRegex.test(phone)) {
+        errors.phone = `Invalid phone format: "${phone}". Please use format like +1234567890 or 1234567890`;
+        console.log('[VALIDATION] Invalid phone format:', phone);
+      }
+    }
+    
+    // Validate password
+    if (!password || password === '') {
+      errors.password = 'Password is required';
+      console.log('[VALIDATION] Password missing');
+    } else if (password.length < 6) {
+      errors.password = 'Password must be at least 6 characters long';
+      console.log('[VALIDATION] Password too short:', password.length);
+    } else if (password.length > 128) {
+      errors.password = 'Password must be less than 128 characters';
+      console.log('[VALIDATION] Password too long');
+    }
+    
+    // If there are validation errors, return them all
+    if (Object.keys(errors).length > 0) {
+      console.log('[VALIDATION] Multiple validation errors:', errors);
+      return res.status(400).json({
         success: false,
-        error: 'Missing required fields. Please provide: firstName, lastName, email, password'
+        error: 'Please fix the following errors:',
+        errors,
+        message: Object.values(errors).join('; ')
       });
     }
     
-    // Validate email format
-    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-    if (!emailRegex.test(email)) {
-      console.log('[DEBUG] Invalid email format:', email);
-      return res.status(400).json({ 
+    // Check if username already exists
+    console.log('[DEBUG] Checking if username already exists:', username);
+    const existingUsername = await User.findOne({ username: username.toLowerCase() });
+    if (existingUsername) {
+      console.log('[VALIDATION] Username already taken:', username);
+      return res.status(400).json({
         success: false,
-        error: `Invalid email format: "${email}". Please enter a valid email address.`
+        error: 'Username already taken',
+        errors: {
+          username: `This username is already taken. Please choose a different username.`
+        }
       });
     }
     
-    // Validate password length
-    if (password.length < 6) {
-      console.log('[DEBUG] Password too short');
-      return res.status(400).json({ 
+    // Check if email already exists
+    console.log('[DEBUG] Checking if email already exists:', email);
+    const existingEmail = await User.findOne({ email: email.toLowerCase() });
+    if (existingEmail) {
+      console.log('[VALIDATION] Email already registered:', email);
+      return res.status(400).json({
         success: false,
-        error: 'Password must be at least 6 characters long'
+        error: 'Email address already registered',
+        errors: {
+          email: `This email address is already registered. Please login or use a different email.`
+        }
       });
     }
     
-    // Check if user exists
-    console.log('[DEBUG] Checking if user exists:', email);
-    const existing = await User.findOne({ $or: [{ email }, { phone }] });
-    if (existing) {
-      console.log('[DEBUG] User already exists:', email);
-      return res.status(400).json({ 
-        success: false,
-        error: 'This email or phone number is already registered. Please login or use a different email.'
-      });
+    // Check if phone already exists (if provided)
+    if (phone && phone.trim() !== '') {
+      console.log('[DEBUG] Checking if phone already exists:', phone);
+      const existingPhone = await User.findOne({ phone });
+      if (existingPhone) {
+        console.log('[VALIDATION] Phone already registered:', phone);
+        return res.status(400).json({
+          success: false,
+          error: 'Phone number already registered',
+          errors: {
+            phone: `This phone number is already registered. Please use a different phone number.`
+          }
+        });
+      }
     }
     
-    console.log('[DEBUG] Creating user');
+    console.log('[DEBUG] All validations passed');
+    console.log('[DEBUG] Creating user with email:', email);
     const user = new User({
-      firstName,
-      lastName,
-      email,
-      phone,
+      firstName: firstName.trim(),
+      lastName: lastName.trim(),
+      username: username.toLowerCase().trim(),
+      email: email.toLowerCase(),
+      phone: phone ? phone.trim() : undefined,
       passwordHash: password,
       qrCodeData: `wavva_pay_${email}_${Date.now()}`,
     });
@@ -144,6 +231,7 @@ router.post('/signup', async (req, res) => {
       refreshToken,
       user: {
         id: user._id,
+        username: user.username,
         email: user.email,
         phone: user.phone || '',
         firstName: user.firstName,
@@ -166,7 +254,10 @@ router.post('/signup', async (req, res) => {
       const field = Object.keys(err.keyPattern)[0];
       return res.status(400).json({
         success: false,
-        error: `This ${field} is already registered. Please use a different ${field}.`
+        error: `${field} already exists`,
+        errors: {
+          [field]: `This ${field} is already registered. Please use a different ${field}.`
+        }
       });
     }
     
