@@ -53,6 +53,8 @@ const router = express.Router();
  */
 router.post('/signup', async (req, res) => {
   console.log('[DEBUG] Signup route hit');
+  console.log('[DEBUG] Request body:', req.body);
+  
   try {
     const { firstName, lastName, email, phone, password } = req.body;
     
@@ -60,9 +62,10 @@ router.post('/signup', async (req, res) => {
     
     // Validation
     if (!firstName || !lastName || !email || !password) {
-      console.log('[DEBUG] Validation failed');
+      console.log('[DEBUG] Validation failed - missing fields');
       return res.status(400).json({ 
-        error: 'Missing required fields. Required: firstName, lastName, email, password'
+        success: false,
+        error: 'Missing required fields. Please provide: firstName, lastName, email, password'
       });
     }
     
@@ -71,7 +74,8 @@ router.post('/signup', async (req, res) => {
     if (!emailRegex.test(email)) {
       console.log('[DEBUG] Invalid email format:', email);
       return res.status(400).json({ 
-        error: 'Invalid email format'
+        success: false,
+        error: `Invalid email format: "${email}". Please enter a valid email address.`
       });
     }
     
@@ -79,7 +83,8 @@ router.post('/signup', async (req, res) => {
     if (password.length < 6) {
       console.log('[DEBUG] Password too short');
       return res.status(400).json({ 
-        error: 'Password must be at least 6 characters'
+        success: false,
+        error: 'Password must be at least 6 characters long'
       });
     }
     
@@ -88,7 +93,10 @@ router.post('/signup', async (req, res) => {
     const existing = await User.findOne({ $or: [{ email }, { phone }] });
     if (existing) {
       console.log('[DEBUG] User already exists:', email);
-      return res.status(400).json({ error: 'User already exists' });
+      return res.status(400).json({ 
+        success: false,
+        error: 'This email or phone number is already registered. Please login or use a different email.'
+      });
     }
     
     console.log('[DEBUG] Creating user');
@@ -103,7 +111,7 @@ router.post('/signup', async (req, res) => {
     
     console.log('[DEBUG] Saving user...');
     await user.save();
-    console.log('[DEBUG] User saved');
+    console.log('[DEBUG] User saved successfully');
     
     console.log('[DEBUG] Creating wallet...');
     const wallet = new Wallet({ userId: user._id });
@@ -116,19 +124,22 @@ router.post('/signup', async (req, res) => {
     console.log('[DEBUG] Wallet reference saved');
     
     // Send email verification code
-    console.log('[DEBUG] Sending email...');
+    console.log('[DEBUG] Sending email verification...');
     try {
       await sendEmailVerificationCode(user);
-      console.log('[DEBUG] Email sent');
+      console.log('[DEBUG] Email sent successfully');
     } catch (emailErr) {
-      console.error('[WARN] Email failed:', emailErr.message);
+      console.error('[WARN] Email sending failed (non-critical):', emailErr.message);
+      // Don't fail signup if email fails
     }
     
     console.log('[DEBUG] Generating tokens...');
     const { accessToken, refreshToken } = generateTokenPair(user._id);
     
-    console.log('[DEBUG] Sending response...');
-    res.json({
+    console.log('[DEBUG] Sending success response...');
+    res.status(201).json({
+      success: true,
+      message: 'Account created successfully! Please check your email for verification.',
       accessToken,
       refreshToken,
       user: {
@@ -142,17 +153,27 @@ router.post('/signup', async (req, res) => {
         kycStatus: user.kyc?.verified ? 'verified' : 'pending',
         isAdmin: user.isAdmin || false,
         createdAt: user.createdAt
-      },
-      message: 'Signup successful',
+      }
     });
-    console.log('[DEBUG] Response sent');
+    console.log('[DEBUG] Response sent successfully');
   } catch (err) {
-    console.error('[ERROR] Signup error:', err.message);
-    console.error('[ERROR] Stack:', err.stack);
-    console.error('[ERROR] Full error:', err);
+    console.error('[ERROR] Signup error occurred');
+    console.error('[ERROR] Error message:', err.message);
+    console.error('[ERROR] Error stack:', err.stack);
+    
+    // Check for specific MongoDB errors
+    if (err.code === 11000) {
+      const field = Object.keys(err.keyPattern)[0];
+      return res.status(400).json({
+        success: false,
+        error: `This ${field} is already registered. Please use a different ${field}.`
+      });
+    }
+    
     res.status(500).json({ 
-      error: err.message || 'Signup failed',
-      details: process.env.NODE_ENV === 'development' ? err.stack : undefined
+      success: false,
+      error: err.message || 'Account creation failed. Please try again later.',
+      ...(process.env.NODE_ENV === 'development' && { details: err.stack })
     });
   }
 });
