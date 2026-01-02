@@ -323,18 +323,22 @@ router.post('/fund/verify', authMiddleware, async (req, res) => {
 
     await transaction.save();
 
-    // Update wallet balance (with fee deducted)
+    // Update wallet balance (with fee deducted) - Use dual wallet system
     const wallet = await Wallet.findById(user.walletId);
     if (!wallet) {
       return res.status(404).json({ error: 'Wallet not found' });
     }
 
-    const previousBalance = wallet.balance;
+    // Get or create currency-specific wallet
+    const currencyWallet = wallet.getOrCreateWallet(verificationResult.currency);
+    const previousBalance = currencyWallet.balance;
     const creditAmount = netAmount; // Credit only net amount (after fee)
-    wallet.balance += creditAmount;
+    
+    // Update the currency-specific wallet balance
+    currencyWallet.balance += creditAmount;
     await wallet.save();
 
-    console.log(`Wallet updated: ${userId} | Previous: ${previousBalance} | Gross: ${amountInCents} | Fee: ${feeAmount} | Net: ${creditAmount} | New: ${wallet.balance}`);
+    console.log(`Wallet updated: ${userId} | Currency: ${verificationResult.currency} | Previous: ${previousBalance} | Gross: ${amountInCents} | Fee: ${feeAmount} | Net: ${creditAmount} | New: ${currencyWallet.balance}`);
 
     res.json({
       success: true,
@@ -349,7 +353,7 @@ router.post('/fund/verify', authMiddleware, async (req, res) => {
         netAmount: (creditAmount / 100).toFixed(2),
         currency: verificationResult.currency
       },
-      newBalance: wallet.balance / 100,
+      newBalance: currencyWallet.balance / 100,
     });
   } catch (err) {
     console.error('Fund verification error:', err);

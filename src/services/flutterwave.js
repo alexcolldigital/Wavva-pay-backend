@@ -16,7 +16,7 @@ const initializePayment = async (email, amount, currency = 'NGN', metadata = {})
       tx_ref: `WVP-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
       amount,
       currency,
-      redirect_url: `${process.env.FRONTEND_URL}/payments/verify`,
+      redirect_url: `${process.env.FRONTEND_URL}/wallet?payment_status=true`,
       payment_options: 'card,mobilemoney,ussd',
       customer: {
         email,
