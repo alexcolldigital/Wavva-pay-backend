@@ -24,7 +24,7 @@ mongoose.connect(mongoURI)
 
 // Parse allowed origins from environment
 const getAllowedOrigins = () => {
-  const allowedOriginsEnv = process.env.ALLOWED_ORIGINS || 'http://localhost:5173';
+  const allowedOriginsEnv = process.env.ALLOWED_ORIGINS || 'http://localhost:5173,http://localhost:3001';
   return allowedOriginsEnv.split(',').map(origin => origin.trim());
 };
 

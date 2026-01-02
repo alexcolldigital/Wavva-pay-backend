@@ -323,6 +323,81 @@ router.post('/login', async (req, res) => {
 
 /**
  * @swagger
+ * /auth/admin/login:
+ *   post:
+ *     tags:
+ *       - Authentication
+ *     summary: Admin login
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             properties:
+ *               email:
+ *                 type: string
+ *               password:
+ *                 type: string
+ *     responses:
+ *       200:
+ *         description: Admin login successful
+ *       401:
+ *         description: Invalid credentials or not an admin
+ *       500:
+ *         description: Server error
+ */
+router.post('/admin/login', async (req, res) => {
+  try {
+    const { email, password } = req.body;
+
+    // Validate input
+    if (!email || !password) {
+      return res.status(400).json({ error: 'Email and password required' });
+    }
+
+    // Find user by email
+    const user = await User.findOne({ email });
+    
+    if (!user) {
+      return res.status(401).json({ error: 'Invalid credentials' });
+    }
+
+    // Check if user is admin
+    if (!user.isAdmin) {
+      return res.status(401).json({ error: 'Not authorized as admin' });
+    }
+
+    // Verify password
+    const isPasswordValid = await user.comparePassword(password);
+    if (!isPasswordValid) {
+      return res.status(401).json({ error: 'Invalid credentials' });
+    }
+
+    // Generate token pair (access + refresh)
+    const { accessToken, refreshToken } = generateTokenPair(user._id);
+
+    res.json({
+      token: accessToken,
+      refreshToken,
+      admin: {
+        id: user._id,
+        email: user.email,
+        firstName: user.firstName,
+        lastName: user.lastName,
+        phone: user.phone || '',
+        isAdmin: user.isAdmin,
+        createdAt: user.createdAt
+      }
+    });
+  } catch (err) {
+    logger.error('Admin login failed:', err.message);
+    res.status(500).json({ error: 'Login failed' });
+  }
+});
+
+/**
+ * @swagger
  * /auth/google:
  *   post:
  *     tags:

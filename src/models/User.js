@@ -14,6 +14,8 @@ const userSchema = new mongoose.Schema({
   passwordHash: String,
   googleId: { type: String, unique: true, sparse: true },
   profilePicture: String,
+  profilePicturePublicId: String, // Cloudinary public ID for easy deletion
+
   
   // Verification
   emailVerified: { type: Boolean, default: false },

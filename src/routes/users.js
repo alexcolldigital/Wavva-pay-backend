@@ -6,25 +6,11 @@ const { generateUserId, validateUsername, validatePhone, parseUserIdentifier } =
 const multer = require('multer');
 const path = require('path');
 const fs = require('fs');
+const cloudinaryService = require('../services/cloudinary');
 const router = express.Router();
 
-// Configure multer for image uploads
-const storage = multer.diskStorage({
-  destination: (req, file, cb) => {
-    const uploadDir = path.join(__dirname, '../../uploads/profiles');
-    // Create directory if it doesn't exist
-    if (!fs.existsSync(uploadDir)) {
-      fs.mkdirSync(uploadDir, { recursive: true });
-    }
-    cb(null, uploadDir);
-  },
-  filename: (req, file, cb) => {
-    // Use userId and timestamp for unique filename
-    const ext = path.extname(file.originalname);
-    const filename = `${req.userId}_${Date.now()}${ext}`;
-    cb(null, filename);
-  },
-});
+// Configure multer for memory storage (will upload to Cloudinary directly)
+const storage = multer.memoryStorage();
 
 const upload = multer({
   storage: storage,
@@ -93,13 +79,21 @@ router.post('/upload-profile-picture', authMiddleware, upload.single('image'), a
       return res.status(400).json({ error: 'No image file provided' });
     }
 
-    // Generate URL for the uploaded file
-    const imageUrl = `/uploads/profiles/${req.file.filename}`;
+    // Upload to Cloudinary
+    const cloudinaryResult = await cloudinaryService.uploadProfilePicture(
+      req.file.buffer,
+      req.userId,
+      req.file.originalname
+    );
 
     // Update user profile with new picture URL
     const user = await User.findByIdAndUpdate(
       req.userId,
-      { profilePicture: imageUrl },
+      {
+        profilePicture: cloudinaryResult.secure_url,
+        // Store the public ID for easy deletion later
+        profilePicturePublicId: cloudinaryResult.public_id,
+      },
       { new: true }
     ).select('-passwordHash');
 
@@ -109,12 +103,13 @@ router.post('/upload-profile-picture', authMiddleware, upload.single('image'), a
 
     res.json({
       success: true,
-      url: imageUrl,
+      url: cloudinaryResult.secure_url,
+      publicId: cloudinaryResult.public_id,
       message: 'Profile picture uploaded successfully',
     });
   } catch (err) {
     console.error('Profile picture upload error:', err);
-    res.status(500).json({ error: 'Failed to upload profile picture' });
+    res.status(500).json({ error: err.message || 'Failed to upload profile picture' });
   }
 });
 
@@ -127,14 +122,19 @@ router.delete('/profile-picture', authMiddleware, async (req, res) => {
       return res.status(404).json({ error: 'No profile picture to delete' });
     }
 
-    // Delete file from disk
-    const filePath = path.join(__dirname, '../../', user.profilePicture);
-    if (fs.existsSync(filePath)) {
-      fs.unlinkSync(filePath);
+    // Delete from Cloudinary if public ID exists
+    if (user.profilePicturePublicId) {
+      try {
+        await cloudinaryService.deleteProfilePicture(user.profilePicturePublicId);
+      } catch (error) {
+        console.error('Error deleting from Cloudinary:', error);
+        // Continue even if Cloudinary deletion fails
+      }
     }
 
     // Remove picture URL from user
     user.profilePicture = null;
+    user.profilePicturePublicId = null;
     await user.save();
 
     res.json({
