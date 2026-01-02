@@ -281,24 +281,30 @@ router.post('/fund/verify', authMiddleware, async (req, res) => {
     const { transactionId } = req.body;
     const userId = req.userId;
 
+    console.log('🔍 Payment verification started:', { userId, transactionId });
+
     if (!transactionId) {
       return res.status(400).json({ error: 'Transaction ID required' });
     }
 
     const user = await User.findById(userId).populate('walletId');
     if (!user) {
+      console.error('❌ User not found:', userId);
       return res.status(404).json({ error: 'User not found' });
     }
 
     if (!user.walletId) {
+      console.error('❌ User wallet not found:', userId);
       return res.status(404).json({ error: 'User wallet not found' });
     }
 
     const { verifyPayment } = require('../services/flutterwave');
     const verificationResult = await verifyPayment(transactionId);
 
+    console.log('✓ Flutterwave verification result:', verificationResult);
+
     if (!verificationResult.success) {
-      console.error('Verification failed:', verificationResult);
+      console.error('❌ Verification failed:', verificationResult);
       return res.status(400).json({ 
         error: 'Payment verification failed',
         status: verificationResult.status 
@@ -330,6 +336,7 @@ router.post('/fund/verify', authMiddleware, async (req, res) => {
     // Update wallet balance (with fee deducted) - Use dual wallet system
     const wallet = await Wallet.findById(user.walletId);
     if (!wallet) {
+      console.error('❌ Wallet not found:', user.walletId);
       return res.status(404).json({ error: 'Wallet not found' });
     }
 
@@ -338,11 +345,23 @@ router.post('/fund/verify', authMiddleware, async (req, res) => {
     const previousBalance = currencyWallet.balance;
     const creditAmount = netAmount; // Credit only net amount (after fee)
     
+    console.log('💰 Updating wallet balance:', {
+      userId,
+      currency: verificationResult.currency,
+      previousBalance,
+      creditAmount,
+      newBalance: previousBalance + creditAmount
+    });
+    
     // Update the currency-specific wallet balance
     currencyWallet.balance += creditAmount;
+    
+    // IMPORTANT: Mark the wallets array as modified for Mongoose to detect the change
+    wallet.markModified('wallets');
+    
     await wallet.save();
 
-    console.log(`Wallet updated: ${userId} | Currency: ${verificationResult.currency} | Previous: ${previousBalance} | Gross: ${amountInCents} | Fee: ${feeAmount} | Net: ${creditAmount} | New: ${currencyWallet.balance}`);
+    console.log(`✅ Wallet updated: ${userId} | Currency: ${verificationResult.currency} | Previous: ${previousBalance} | Gross: ${amountInCents} | Fee: ${feeAmount} | Net: ${creditAmount} | New: ${currencyWallet.balance}`);
 
     res.json({
       success: true,

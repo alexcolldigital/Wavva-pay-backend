@@ -80,6 +80,8 @@ router.get('/', authMiddleware, async (req, res) => {
     const usdWallet = wallet.getOrCreateWallet('USD');
     const nairaWallet = wallet.getOrCreateWallet('NGN');
     
+    // IMPORTANT: Mark wallets array as modified in case new wallets were created
+    wallet.markModified('wallets');
     await wallet.save();
 
     res.json({
@@ -170,6 +172,9 @@ router.post('/:currency/add-funds', authMiddleware, async (req, res) => {
     const amountInCents = Math.round(amount * 100);
     
     wallet.addFunds(currency.toUpperCase(), amountInCents);
+    
+    // IMPORTANT: Mark wallets array as modified for Mongoose to detect the change
+    wallet.markModified('wallets');
     await wallet.save();
 
     const currencyWallet = wallet.getWallet(currency.toUpperCase());
