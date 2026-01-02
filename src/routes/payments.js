@@ -249,11 +249,15 @@ router.post('/fund/initialize', authMiddleware, async (req, res) => {
 
     const { initializePayment } = require('../services/flutterwave');
     
+    // Get request origin for multi-URL support
+    const requestOrigin = req.headers.origin || req.headers.referer?.split('/').slice(0, 3).join('/')
+    
     const paymentResult = await initializePayment(
       user.email,
       amount,
       currency,
-      { userId: userId.toString(), type: 'wallet_funding' }
+      { userId: userId.toString(), type: 'wallet_funding' },
+      requestOrigin
     );
 
     if (!paymentResult.success) {

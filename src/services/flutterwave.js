@@ -9,14 +9,35 @@ const flutterwaveClient = axios.create({
   },
 });
 
+// Get frontend URL based on allowed URLs
+const getAllowedFrontendUrls = () => {
+  if (process.env.FRONTEND_URLS) {
+    return process.env.FRONTEND_URLS.split(',').map(url => url.trim())
+  }
+  return [process.env.FRONTEND_URL || 'http://localhost:5173']
+}
+
+const getFrontendUrl = (requestOrigin = null) => {
+  const allowedUrls = getAllowedFrontendUrls()
+  
+  // If request origin is provided and it's in the allowed list, use it
+  if (requestOrigin && allowedUrls.includes(requestOrigin)) {
+    return requestOrigin
+  }
+  
+  // Otherwise use the first URL from the list (or default)
+  return allowedUrls[0] || process.env.FRONTEND_URL || 'http://localhost:5173'
+}
+
 // Initialize payment
-const initializePayment = async (email, amount, currency = 'NGN', metadata = {}) => {
+const initializePayment = async (email, amount, currency = 'NGN', metadata = {}, requestOrigin = null) => {
   try {
+    const frontendUrl = getFrontendUrl(requestOrigin)
     const payload = {
       tx_ref: `WVP-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
       amount,
       currency,
-      redirect_url: `${process.env.FRONTEND_URL}/wallet?payment_status=true`,
+      redirect_url: `${frontendUrl}/wallet?payment_status=true`,
       payment_options: 'card,mobilemoney,ussd',
       customer: {
         email,
@@ -24,7 +45,7 @@ const initializePayment = async (email, amount, currency = 'NGN', metadata = {})
       customizations: {
         title: 'Wavva Pay - Add Funds',
         description: 'Add funds to your Wavva Pay wallet',
-        logo: `${process.env.FRONTEND_URL}/logo.png`,
+        logo: `${frontendUrl}/logo.png`,
       },
       meta: metadata,
     };
