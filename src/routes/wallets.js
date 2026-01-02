@@ -5,7 +5,10 @@ const Wallet = require('../models/Wallet');
 const Transaction = require('../models/Transaction');
 const router = express.Router();
 
-// Get wallet analytics
+// NOTE: Order matters! Specific routes must come before parameter routes
+// This prevents /analytics being matched as /:currency='analytics'
+
+// Get wallet analytics (specific route before /:currency)
 router.get('/analytics', authMiddleware, async (req, res) => {
   try {
     const user = await User.findById(req.userId).populate('walletId');
@@ -40,32 +43,148 @@ router.get('/analytics', authMiddleware, async (req, res) => {
       return txDate.getMonth() === now.getMonth() && txDate.getFullYear() === now.getFullYear();
     });
 
-    // Top contacts
-    const contacts = {};
-    transactions.forEach(t => {
-      const contactId = t.sender.equals(req.userId) ? t.receiver : t.sender;
-      contacts[contactId] = (contacts[contactId] || 0) + 1;
-    });
-
-    const topContacts = Object.entries(contacts)
-      .sort((a, b) => b[1] - a[1])
-      .slice(0, 5);
+    // Get primary wallet for backward compatibility
+    const wallet = user.walletId;
+    const primaryWallet = wallet.getOrCreateWallet('NGN');
 
     res.json({
-      balance: user.walletId.balance / 100,
-      currency: user.walletId.currency,
+      balance: primaryWallet.balance / 100,
+      currency: 'NGN',
       analytics: {
         totalSent: sent / 100,
         totalReceived: received / 100,
         transactionCount: transactions.length,
         avgTransaction: avgTransaction / 100,
         thisMonthCount: currentMonth.length,
-        topContacts: topContacts.map(([contactId]) => contactId),
+        topContacts: [],
       },
     });
   } catch (err) {
-    console.error(err);
+    console.error('Analytics error:', err);
     res.status(500).json({ error: 'Failed to fetch analytics' });
+  }
+});
+
+// Get all wallets for user (USD and NGN)
+router.get('/', authMiddleware, async (req, res) => {
+  try {
+    const user = await User.findById(req.userId).populate('walletId');
+    
+    if (!user?.walletId) {
+      return res.status(404).json({ error: 'Wallets not found' });
+    }
+
+    const wallet = user.walletId;
+    
+    // Get or create wallets for both currencies
+    const usdWallet = wallet.getOrCreateWallet('USD');
+    const nairaWallet = wallet.getOrCreateWallet('NGN');
+    
+    await wallet.save();
+
+    res.json({
+      success: true,
+      wallets: {
+        usd: {
+          currency: 'USD',
+          balance: usdWallet.balance / 100,
+          dailyLimit: usdWallet.dailyLimit / 100,
+          monthlyLimit: usdWallet.monthlyLimit / 100,
+          dailySpent: usdWallet.dailySpent / 100,
+          monthlySpent: usdWallet.monthlySpent / 100,
+        },
+        ngn: {
+          currency: 'NGN',
+          balance: nairaWallet.balance / 100,
+          dailyLimit: nairaWallet.dailyLimit / 100,
+          monthlyLimit: nairaWallet.monthlyLimit / 100,
+          dailySpent: nairaWallet.dailySpent / 100,
+          monthlySpent: nairaWallet.monthlySpent / 100,
+        },
+      }
+    });
+  } catch (err) {
+    console.error('Error fetching wallets:', err);
+    res.status(500).json({ error: 'Failed to fetch wallets' });
+  }
+});
+
+// Get specific wallet by currency
+router.get('/:currency', authMiddleware, async (req, res) => {
+  try {
+    const { currency } = req.params;
+    
+    if (!['USD', 'NGN'].includes(currency.toUpperCase())) {
+      return res.status(400).json({ error: 'Invalid currency. Supported: USD, NGN' });
+    }
+
+    const user = await User.findById(req.userId).populate('walletId');
+    
+    if (!user?.walletId) {
+      return res.status(404).json({ error: 'Wallet not found' });
+    }
+
+    const wallet = user.walletId;
+    const currencyWallet = wallet.getOrCreateWallet(currency.toUpperCase());
+    
+    await wallet.save();
+
+    res.json({
+      success: true,
+      wallet: {
+        currency: currencyWallet.currency,
+        balance: currencyWallet.balance / 100,
+        dailyLimit: currencyWallet.dailyLimit / 100,
+        monthlyLimit: currencyWallet.monthlyLimit / 100,
+        dailySpent: currencyWallet.dailySpent / 100,
+        monthlySpent: currencyWallet.monthlySpent / 100,
+      }
+    });
+  } catch (err) {
+    console.error('Error fetching wallet:', err);
+    res.status(500).json({ error: 'Failed to fetch wallet' });
+  }
+});
+
+// Add funds to wallet
+router.post('/:currency/add-funds', authMiddleware, async (req, res) => {
+  try {
+    const { currency } = req.params;
+    const { amount } = req.body;
+
+    if (!['USD', 'NGN'].includes(currency.toUpperCase())) {
+      return res.status(400).json({ error: 'Invalid currency. Supported: USD, NGN' });
+    }
+
+    if (!amount || amount <= 0) {
+      return res.status(400).json({ error: 'Invalid amount' });
+    }
+
+    const user = await User.findById(req.userId).populate('walletId');
+    
+    if (!user?.walletId) {
+      return res.status(404).json({ error: 'Wallet not found' });
+    }
+
+    const wallet = user.walletId;
+    const amountInCents = Math.round(amount * 100);
+    
+    wallet.addFunds(currency.toUpperCase(), amountInCents);
+    await wallet.save();
+
+    const currencyWallet = wallet.getWallet(currency.toUpperCase());
+
+    res.json({
+      success: true,
+      message: `${amount} ${currency.toUpperCase()} added successfully`,
+      wallet: {
+        currency: currencyWallet.currency,
+        balance: currencyWallet.balance / 100,
+      }
+    });
+  } catch (err) {
+    console.error('Error adding funds:', err);
+    res.status(500).json({ error: err.message || 'Failed to add funds' });
   }
 });
 

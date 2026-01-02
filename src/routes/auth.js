@@ -197,10 +197,26 @@ router.post('/signup', async (req, res) => {
     await user.save();
     console.log('[DEBUG] User saved successfully');
     
-    console.log('[DEBUG] Creating wallet...');
-    const wallet = new Wallet({ userId: user._id });
+    console.log('[DEBUG] Creating wallet with USD and NGN support...');
+    const wallet = new Wallet({ 
+      userId: user._id,
+      wallets: [
+        {
+          currency: 'USD',
+          balance: 0,
+          dailyLimit: 10000 * 100,
+          monthlyLimit: 100000 * 100,
+        },
+        {
+          currency: 'NGN',
+          balance: 0,
+          dailyLimit: 10000 * 100,
+          monthlyLimit: 100000 * 100,
+        }
+      ]
+    });
     await wallet.save();
-    console.log('[DEBUG] Wallet created');
+    console.log('[DEBUG] Wallet created with USD and NGN');
     
     user.walletId = wallet._id;
     console.log('[DEBUG] Saving wallet reference...');

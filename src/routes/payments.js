@@ -4,6 +4,7 @@ const User = require('../models/User');
 const Wallet = require('../models/Wallet');
 const Transaction = require('../models/Transaction');
 const { createTransfer, getTransferStatus, getBankList, initiateBankTransfer, resolveBankAccount } = require('../services/flutterwave');
+const { calculateFee } = require('../utils/feeCalculator');
 const router = express.Router();
 
 // Send money P2P (internal transfer) - Only via username, QR code, or NFC
@@ -15,6 +16,14 @@ router.post('/send', authMiddleware, async (req, res) => {
     // Validation
     if (!receiverId || !amount || amount <= 0) {
       return res.status(400).json({ error: 'Invalid amount or receiver' });
+    }
+
+    // Validate currency (only USD and NGN allowed)
+    const validCurrencies = ['USD', 'NGN'];
+    if (!validCurrencies.includes(currency)) {
+      return res.status(400).json({ 
+        error: 'Invalid currency. Only USD and NGN are supported.' 
+      });
     }
 
     // Validate method (only username, qr, or nfc allowed)
@@ -38,18 +47,26 @@ router.post('/send', authMiddleware, async (req, res) => {
       return res.status(400).json({ error: 'Cannot send money to yourself' });
     }
     
-    // Check sender's balance
+    // Calculate transaction fee (P2P transfer)
+    const amountInCents = Math.round(amount * 100);
+    const { feeAmount, netAmount, feePercentage } = calculateFee(amountInCents, currency, 'p2p_transfer');
+    const totalDebit = amountInCents + feeAmount; // Sender pays: amount + fee
+    
+    // Check sender's balance (must cover amount + fee)
     const senderWallet = await Wallet.findById(sender.walletId);
-    if (!senderWallet || senderWallet.balance < amount * 100) { // Convert to cents
-      return res.status(400).json({ error: 'Insufficient balance' });
+    if (!senderWallet || senderWallet.balance < totalDebit) {
+      return res.status(400).json({ error: 'Insufficient balance to cover amount and fee' });
     }
     
     // Create transaction record (internal P2P transfer)
     const transaction = new Transaction({
       sender: senderId,
       receiver: receiverId,
-      amount: amount * 100, // Store in cents
+      amount: amountInCents, // Gross amount (what receiver gets)
       currency,
+      feePercentage,
+      feeAmount,
+      netAmount,
       type: 'peer-to-peer',
       description,
       status: 'completed',
@@ -63,12 +80,12 @@ router.post('/send', authMiddleware, async (req, res) => {
     await transaction.populate('receiver', 'firstName lastName username profilePicture');
     
     // Update balances
-    senderWallet.balance -= amount * 100;
+    senderWallet.balance -= totalDebit; // Deduct amount + fee from sender
     await senderWallet.save();
     
     const receiverWallet = await Wallet.findById(receiver.walletId);
     if (receiverWallet) {
-      receiverWallet.balance += amount * 100;
+      receiverWallet.balance += amountInCents; // Receiver gets the full amount
       await receiverWallet.save();
     }
 
@@ -94,6 +111,11 @@ router.post('/send', authMiddleware, async (req, res) => {
         },
         amount: amount,
         currency,
+        fee: {
+          percentage: feePercentage,
+          amount: (feeAmount / 100).toFixed(2)
+        },
+        totalDebit: (totalDebit / 100).toFixed(2),
         status: transaction.status,
         method,
         createdAt: transaction.createdAt
@@ -212,6 +234,14 @@ router.post('/fund/initialize', authMiddleware, async (req, res) => {
       return res.status(400).json({ error: 'Invalid amount' });
     }
 
+    // Validate currency (only USD and NGN allowed)
+    const validCurrencies = ['USD', 'NGN'];
+    if (!validCurrencies.includes(currency)) {
+      return res.status(400).json({ 
+        error: 'Invalid currency. Only USD and NGN are supported.' 
+      });
+    }
+
     const user = await User.findById(userId);
     if (!user) {
       return res.status(404).json({ error: 'User not found' });
@@ -272,11 +302,17 @@ router.post('/fund/verify', authMiddleware, async (req, res) => {
     }
 
     // Create transaction record
+    const amountInCents = Math.round(verificationResult.amount * 100);
+    const { feeAmount, netAmount, feePercentage } = calculateFee(amountInCents, verificationResult.currency, 'wallet_funding');
+    
     const transaction = new Transaction({
       sender: userId,
       receiver: null, // Self-funding
-      amount: Math.round(verificationResult.amount * 100), // Store in cents
+      amount: amountInCents, // Store in cents
       currency: verificationResult.currency,
+      feePercentage,
+      feeAmount,
+      netAmount,
       type: 'wallet_funding',
       status: 'completed',
       method: 'flutterwave',
@@ -287,22 +323,32 @@ router.post('/fund/verify', authMiddleware, async (req, res) => {
 
     await transaction.save();
 
-    // Update wallet balance
+    // Update wallet balance (with fee deducted)
     const wallet = await Wallet.findById(user.walletId);
     if (!wallet) {
       return res.status(404).json({ error: 'Wallet not found' });
     }
 
     const previousBalance = wallet.balance;
-    wallet.balance += Math.round(verificationResult.amount * 100);
+    const creditAmount = netAmount; // Credit only net amount (after fee)
+    wallet.balance += creditAmount;
     await wallet.save();
 
-    console.log(`Wallet updated: ${userId} | Previous: ${previousBalance} | Added: ${Math.round(verificationResult.amount * 100)} | New: ${wallet.balance}`);
+    console.log(`Wallet updated: ${userId} | Previous: ${previousBalance} | Gross: ${amountInCents} | Fee: ${feeAmount} | Net: ${creditAmount} | New: ${wallet.balance}`);
 
     res.json({
       success: true,
       transactionId: transaction._id,
       message: 'Funds added successfully',
+      payment: {
+        grossAmount: (amountInCents / 100).toFixed(2),
+        fee: {
+          percentage: feePercentage,
+          amount: (feeAmount / 100).toFixed(2)
+        },
+        netAmount: (creditAmount / 100).toFixed(2),
+        currency: verificationResult.currency
+      },
       newBalance: wallet.balance / 100,
     });
   } catch (err) {
@@ -372,6 +418,14 @@ router.post('/bank-transfer', authMiddleware, async (req, res) => {
       return res.status(400).json({ error: 'Invalid account details or amount' });
     }
 
+    // Validate currency (only USD and NGN allowed)
+    const validCurrencies = ['USD', 'NGN'];
+    if (!validCurrencies.includes(currency)) {
+      return res.status(400).json({ 
+        error: 'Invalid currency. Only USD and NGN are supported.' 
+      });
+    }
+
     // Get user and wallet
     const user = await User.findById(userId).populate('walletId');
     if (!user) {
@@ -382,9 +436,14 @@ router.post('/bank-transfer', authMiddleware, async (req, res) => {
       return res.status(404).json({ error: 'User wallet not found' });
     }
 
-    // Check wallet balance
-    if (user.walletId.balance < amount * 100) {
-      return res.status(400).json({ error: 'Insufficient balance' });
+    // Calculate transaction fee (Bank transfer)
+    const amountInCents = Math.round(amount * 100);
+    const { feeAmount, netAmount, feePercentage } = calculateFee(amountInCents, currency, 'bank_transfer');
+    const totalDebit = amountInCents + feeAmount; // User pays: amount + fee
+
+    // Check wallet balance (must cover amount + fee)
+    if (user.walletId.balance < totalDebit) {
+      return res.status(400).json({ error: 'Insufficient balance to cover amount and fee' });
     }
 
     // Initiate bank transfer
@@ -405,8 +464,11 @@ router.post('/bank-transfer', authMiddleware, async (req, res) => {
     const transaction = new Transaction({
       sender: userId,
       receiver: null,
-      amount: Math.round(amount * 100), // Store in cents
+      amount: amountInCents, // Store in cents
       currency,
+      feePercentage,
+      feeAmount,
+      netAmount,
       type: 'payout',
       status: 'pending', // Will update when bank confirms
       method: 'bank_transfer',
@@ -422,9 +484,9 @@ router.post('/bank-transfer', authMiddleware, async (req, res) => {
 
     await transaction.save();
 
-    // Deduct amount from wallet (funds reserved for transfer)
+    // Deduct amount + fee from wallet (funds reserved for transfer)
     const wallet = await Wallet.findById(user.walletId);
-    wallet.balance -= Math.round(amount * 100);
+    wallet.balance -= totalDebit;
     await wallet.save();
 
     res.json({
@@ -435,6 +497,15 @@ router.post('/bank-transfer', authMiddleware, async (req, res) => {
       status: transferResult.status,
       message: 'Bank transfer initiated',
       accountName: transferResult.accountName,
+      transfer: {
+        amount: (amountInCents / 100).toFixed(2),
+        fee: {
+          percentage: feePercentage,
+          amount: (feeAmount / 100).toFixed(2)
+        },
+        total: (totalDebit / 100).toFixed(2),
+        currency
+      }
     });
   } catch (err) {
     console.error('Bank transfer error:', err);

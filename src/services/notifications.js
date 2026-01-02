@@ -39,11 +39,11 @@ const emailTemplates = {
     <html>
       <body style="font-family: Arial, sans-serif; background-color: #000; color: #fff;">
         <div style="max-width: 600px; margin: 0 auto; padding: 20px;">
-          <h2 style="color: #1d4ed8;"> Welcome to Wavva Pay</h2>
+          <h2 style="color: #3B82F6;">Welcome to Wavva Pay</h2>
           <p>Thank you for creating a WavvaPay account. You're required to verify your email address with the code below.</p>
-          <div style="background-color: #1a1a1a; padding: 20px; border-radius: 8px; margin: 20px 0; border-left: 4px solid #39FF14; text-align: center;">
+          <div style="background-color: #1a1a1a; padding: 20px; border-radius: 8px; margin: 20px 0; border-left: 4px solid #3B82F6; text-align: center;">
             <p style="font-size: 14px; color: #999; margin-bottom: 10px;">Your verification code:</p>
-            <p style="font-size: 36px; font-weight: bold; color: #1d4ed8; letter-spacing: 5px; margin: 10px 0;">${code}</p>
+            <p style="font-size: 36px; font-weight: bold; color: #3B82F6; letter-spacing: 5px; margin: 10px 0;">${code}</p>
             <p style="font-size: 12px; color: #999;">Valid for ${expiryMinutes} minutes</p>
           </div>
           <p style="color: #999; font-size: 12px; margin-top: 20px;">If you didn't request this code, please ignore this email.</p>
@@ -56,9 +56,9 @@ const emailTemplates = {
     <html>
       <body style="font-family: Arial, sans-serif; background-color: #000; color: #fff;">
         <div style="max-width: 600px; margin: 0 auto; padding: 20px;">
-          <h2 style="color: #39FF14;">🦑 Welcome to Wavva Pay</h2>
-          <p>We are Venom. Verify your email to unleash the power of symbiotic payments.</p>
-          <a href="${verificationLink}" style="background-color: #39FF14; color: #000; padding: 12px 24px; text-decoration: none; border-radius: 5px; display: inline-block; font-weight: bold; margin: 20px 0;">
+          <h2 style="color: #3B82F6;">Welcome to Wavva Pay</h2>
+          <p>Verify your email to unlock the power of seamless payments.</p>
+          <a href="${verificationLink}" style="background-color: #3B82F6; color: #fff; padding: 12px 24px; text-decoration: none; border-radius: 5px; display: inline-block; font-weight: bold; margin: 20px 0;">
             Verify Email
           </a>
           <p style="color: #999; font-size: 12px;">Link expires in 24 hours.</p>
@@ -71,13 +71,13 @@ const emailTemplates = {
     <html>
       <body style="font-family: Arial, sans-serif; background-color: #000; color: #fff;">
         <div style="max-width: 600px; margin: 0 auto; padding: 20px;">
-          <h2 style="color: #39FF14;"> Payment Confirmed</h2>
+          <h2 style="color: #3B82F6;">Payment Confirmed</h2>
           <p>You sent <strong>${amount} ${currency}</strong> to <strong>${receiver.firstName} ${receiver.lastName}</strong></p>
-          <div style="background-color: #1a1a1a; padding: 15px; border-radius: 5px; margin: 20px 0; border-left: 4px solid #39FF14;">
+          <div style="background-color: #1a1a1a; padding: 15px; border-radius: 5px; margin: 20px 0; border-left: 4px solid #3B82F6;">
             <p><strong>Transaction ID:</strong></p>
             <p style="word-break: break-all; font-family: monospace; font-size: 12px;">${transactionId}</p>
           </div>
-          <p style="color: #39FF14; font-weight: bold;">We are Venom. Together, we are stronger.</p>
+          <p style="color: #3B82F6; font-weight: bold;">Thank you for using Wavva Pay</p>
         </div>
       </body>
     </html>
@@ -87,10 +87,10 @@ const emailTemplates = {
     <html>
       <body style="font-family: Arial, sans-serif; background-color: #000; color: #fff;">
         <div style="max-width: 600px; margin: 0 auto; padding: 20px;">
-          <h2 style="color: #39FF14;">⚡ You've Been Added to a Combine</h2>
+          <h2 style="color: #3B82F6;">You've Been Added to a Combine</h2>
           <p><strong>${combiner}</strong> added you to <strong>${combineName}</strong></p>
           <p>Total to settle: <strong>${amount}</strong></p>
-          <p style="color: #39FF14; font-weight: bold;">We are Venom. Together, we are stronger.</p>
+          <p style="color: #3B82F6; font-weight: bold;">Manage your combines on Wavva Pay</p>
         </div>
       </body>
     </html>

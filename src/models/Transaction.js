@@ -5,7 +5,12 @@ const transactionSchema = new mongoose.Schema({
   receiver: { type: mongoose.Schema.Types.ObjectId, ref: 'User' }, // Optional for wallet funding
   
   amount: { type: Number, required: true }, // in cents
-  currency: { type: String, default: 'NGN' },
+  currency: { type: String, enum: ['USD', 'NGN'], default: 'NGN' },
+  
+  // Transaction fees (in cents)
+  feePercentage: { type: Number }, // Percentage charged (e.g., 1 for 1%, 1.5 for 1.5%)
+  feeAmount: { type: Number, default: 0 }, // Actual fee charged in cents
+  netAmount: { type: Number }, // Amount after fee (amount - feeAmount)
   
   type: { 
     type: String, 

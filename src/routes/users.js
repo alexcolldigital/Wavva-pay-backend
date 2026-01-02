@@ -53,7 +53,13 @@ router.put('/profile', authMiddleware, async (req, res) => {
     if (lastName) updateData.lastName = lastName;
     if (phone) updateData.phone = phone;
     if (profilePicture) updateData.profilePicture = profilePicture;
-    if (preferredCurrency) updateData.preferredCurrency = preferredCurrency;
+    if (preferredCurrency) {
+      // Validate preferred currency (only USD and NGN allowed)
+      if (!['USD', 'NGN'].includes(preferredCurrency)) {
+        return res.status(400).json({ error: 'Invalid currency. Only USD and NGN are supported.' });
+      }
+      updateData.preferredCurrency = preferredCurrency;
+    }
     
     const user = await User.findByIdAndUpdate(
       req.userId,
