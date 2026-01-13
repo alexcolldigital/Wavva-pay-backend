@@ -15,10 +15,21 @@ let transporter = null;
 if (isEmailConfigured()) {
   transporter = nodemailer.createTransport({
     service: 'gmail',
+    host: 'smtp.gmail.com',
+    port: 587,
+    secure: false, // TLS - true would be 465 (SSL)
     auth: {
       user: process.env.EMAIL_USER,
       pass: process.env.EMAIL_PASSWORD,
     },
+    connectionTimeout: 10000, // 10 seconds
+    socketTimeout: 10000,    // 10 seconds
+    pool: {
+      maxConnections: 1,
+      maxMessages: 100,
+      rateDelta: 1000,
+      rateLimit: 5
+    }
   });
 } else {
   console.warn('⚠️ Email service not configured - verification emails will be logged to console instead');
@@ -152,12 +163,27 @@ const sendEmailVerificationCode = async (user) => {
       html: emailTemplates.verificationCode(code, expiryMinutes),
     };
 
+    console.log(`📧 Attempting to send verification code to ${user.email}...`);
     await transporter.sendMail(mailOptions);
     console.log(`✅ Verification code sent to ${user.email}`);
     return true;
   } catch (err) {
     console.error('❌ Email send error:', err.message);
-    return true;
+    console.error('Error details:', {
+      code: err.code,
+      errno: err.errno,
+      syscall: err.syscall,
+      hostname: err.hostname,
+      port: err.port
+    });
+    
+    // For development - still return true so verification code is saved even if email fails
+    if (process.env.NODE_ENV !== 'production') {
+      console.log(`⚠️ Development mode: Email failed but code was saved. Use code: ${user.emailVerificationCode}`);
+      return true;
+    }
+    
+    throw err;
   }
 };
 
