@@ -92,7 +92,7 @@ app.use((req, res, next) => {
   next();
 });
 
-// Error handling middleware
+// 404 Error handling for non-API routes (for SPA routing on frontend)
 app.use((err, req, res, next) => {
   logger.error('Unhandled error', err.message);
   res.status(err.status || 500).json({
@@ -100,8 +100,13 @@ app.use((err, req, res, next) => {
   });
 });
 
-// 404 handler
+// 404 handler - MUST be last
 app.use((req, res) => {
+  // If it's an API request and route not found
+  if (req.path.startsWith('/api/')) {
+    return res.status(404).json({ error: 'API route not found' });
+  }
+  // For other requests, return 200 OK (frontend will handle routing)
   res.status(404).json({ error: 'Route not found' });
 });
 

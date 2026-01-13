@@ -65,19 +65,18 @@ router.get('/analytics', authMiddleware, async (req, res) => {
   }
 });
 
-// Get all wallets for user (USD and NGN)
+// Get NGN wallet for user
 router.get('/', authMiddleware, async (req, res) => {
   try {
     const user = await User.findById(req.userId).populate('walletId');
     
     if (!user?.walletId) {
-      return res.status(404).json({ error: 'Wallets not found' });
+      return res.status(404).json({ error: 'Wallet not found' });
     }
 
     const wallet = user.walletId;
     
-    // Get or create wallets for both currencies
-    const usdWallet = wallet.getOrCreateWallet('USD');
+    // Get or create NGN wallet
     const nairaWallet = wallet.getOrCreateWallet('NGN');
     
     // IMPORTANT: Mark wallets array as modified in case new wallets were created
@@ -87,14 +86,6 @@ router.get('/', authMiddleware, async (req, res) => {
     res.json({
       success: true,
       wallets: {
-        usd: {
-          currency: 'USD',
-          balance: usdWallet.balance / 100,
-          dailyLimit: usdWallet.dailyLimit / 100,
-          monthlyLimit: usdWallet.monthlyLimit / 100,
-          dailySpent: usdWallet.dailySpent / 100,
-          monthlySpent: usdWallet.monthlySpent / 100,
-        },
         ngn: {
           currency: 'NGN',
           balance: nairaWallet.balance / 100,
@@ -107,7 +98,7 @@ router.get('/', authMiddleware, async (req, res) => {
     });
   } catch (err) {
     console.error('Error fetching wallets:', err);
-    res.status(500).json({ error: 'Failed to fetch wallets' });
+    res.status(500).json({ error: 'Failed to fetch wallet' });
   }
 });
 

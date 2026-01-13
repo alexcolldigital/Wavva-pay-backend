@@ -197,16 +197,10 @@ router.post('/signup', async (req, res) => {
     await user.save();
     console.log('[DEBUG] User saved successfully');
     
-    console.log('[DEBUG] Creating wallet with USD and NGN support...');
+    console.log('[DEBUG] Creating wallet with NGN support...');
     const wallet = new Wallet({ 
       userId: user._id,
       wallets: [
-        {
-          currency: 'USD',
-          balance: 0,
-          dailyLimit: 10000 * 100,
-          monthlyLimit: 100000 * 100,
-        },
         {
           currency: 'NGN',
           balance: 0,
@@ -216,7 +210,7 @@ router.post('/signup', async (req, res) => {
       ]
     });
     await wallet.save();
-    console.log('[DEBUG] Wallet created with USD and NGN');
+    console.log('[DEBUG] Wallet created with NGN');
     
     user.walletId = wallet._id;
     console.log('[DEBUG] Saving wallet reference...');
@@ -248,6 +242,7 @@ router.post('/signup', async (req, res) => {
         lastName: user.lastName,
         avatar: user.profilePicture,
         status: user.accountStatus || 'active',
+        emailVerified: user.emailVerified || false,
         kycStatus: user.kyc?.verified ? 'verified' : 'pending',
         isAdmin: user.isAdmin || false,
         createdAt: user.createdAt
@@ -320,12 +315,14 @@ router.post('/login', async (req, res) => {
       refreshToken,
       user: { 
         id: user._id,
+        username: user.username,
         email: user.email,
         phone: user.phone || '',
         firstName: user.firstName,
         lastName: user.lastName,
         avatar: user.profilePicture,
         status: user.accountStatus || 'active',
+        emailVerified: user.emailVerified || false,
         kycStatus: user.kyc?.verified ? 'verified' : 'pending',
         isAdmin: user.isAdmin || false,
         createdAt: user.createdAt
@@ -828,6 +825,44 @@ router.post('/verify-email-code', async (req, res) => {
   } catch (err) {
     logger.error('Email code verification failed', err.message);
     res.status(500).json({ error: 'Email verification failed' });
+  }
+});
+
+/**
+ * @swagger
+ * /auth/resend-verification-code:
+ *   post:
+ *     tags:
+ *       - Authentication
+ *     summary: Resend verification code to email
+ *     security:
+ *       - bearerAuth: []
+ *     responses:
+ *       200:
+ *         description: Verification code sent
+ */
+router.post('/resend-verification-code', async (req, res) => {
+  try {
+    const userId = req.userId;
+    const user = await User.findById(userId);
+    
+    if (!user) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+    
+    if (user.emailVerified) {
+      return res.status(400).json({ error: 'Email already verified' });
+    }
+    
+    // Send new verification code
+    const { sendEmailVerificationCode } = require('../services/notifications');
+    await sendEmailVerificationCode(user);
+    
+    logger.info('Verification code resent', { userId: user._id, email: user.email });
+    res.json({ message: 'Verification code sent to your email' });
+  } catch (err) {
+    logger.error('Resend verification code failed', err.message);
+    res.status(500).json({ error: 'Failed to resend verification code' });
   }
 });
 
