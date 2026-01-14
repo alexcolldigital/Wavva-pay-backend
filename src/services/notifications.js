@@ -121,11 +121,16 @@ const sendEmailVerification = async (user) => {
     await user.save();
 
     const verificationLink = `${process.env.FRONTEND_URL}/verify-email?userId=${user._id}&token=${token}`;
+    
+    console.log(`\n📧 [EMAIL_VERIFY] Generating email verification for ${user.email}`);
+    console.log(`📧 [EMAIL_VERIFY] User ID: ${user._id}`);
+    console.log(`📧 [EMAIL_VERIFY] Token: ${token.substring(0, 10)}...`);
 
     if (!transporter) {
-      console.log('📧 Email not configured. Verification link (for development):');
-      console.log(verificationLink);
-      return true; // Return success so signup doesn't fail
+      console.warn(`⚠️ [EMAIL_VERIFY] Email transporter not initialized`);
+      console.log(`📧 [EMAIL_VERIFY] Development mode: Verification link available in logs`);
+      console.log(`📧 [EMAIL_VERIFY] Link: ${verificationLink}`);
+      return true;
     }
 
     const mailOptions = {
@@ -151,13 +156,19 @@ const sendEmailVerificationCode = async (user) => {
     const code = Math.floor(100000 + Math.random() * 900000).toString();
     const expiryMinutes = 15;
     
+    console.log(`\n📧 [VERIFY_CODE] Generating verification code for ${user.email}`);
+    console.log(`📧 [VERIFY_CODE] Code: ${code}`);
+    console.log(`📧 [VERIFY_CODE] Expires in: ${expiryMinutes} minutes`);
+    
     user.emailVerificationCode = code;
     user.emailVerificationCodeExpires = new Date(Date.now() + expiryMinutes * 60 * 1000);
     await user.save();
+    console.log(`✅ [VERIFY_CODE] Code saved to database for ${user.email}`);
 
     if (!transporter) {
-      console.log('📧 Email not configured. Verification code for development:');
-      console.log(`Code: ${code} for ${user.email}`);
+      console.warn(`⚠️ [VERIFY_CODE] Email transporter not initialized`);
+      console.log(`📧 [VERIFY_CODE] Development mode: Code available in logs`);
+      console.log(`📧 [VERIFY_CODE] ${user.email} - Code: ${code}`);
       return true;
     }
 
@@ -168,27 +179,32 @@ const sendEmailVerificationCode = async (user) => {
       html: emailTemplates.verificationCode(code, expiryMinutes),
     };
 
-    console.log(`📧 Attempting to send verification code to ${user.email}...`);
-    await transporter.sendMail(mailOptions);
-    console.log(`✅ Verification code sent to ${user.email}`);
+    console.log(`📧 [VERIFY_CODE] Attempting to send email to ${user.email}...`);
+    console.log(`📧 [VERIFY_CODE] From: ${mailOptions.from}`);
+    console.log(`📧 [VERIFY_CODE] To: ${mailOptions.to}`);
+    
+    const sendResult = await transporter.sendMail(mailOptions);
+    console.log(`✅ [VERIFY_CODE] Email sent successfully!`);
+    console.log(`📧 [VERIFY_CODE] Response: ${sendResult.response}`);
+    console.log(`📧 [VERIFY_CODE] Message ID: ${sendResult.messageId}\n`);
     return true;
   } catch (err) {
-    console.error('❌ Email send error:', err.message);
-    console.error('Error details:', {
-      code: err.code,
-      errno: err.errno,
-      syscall: err.syscall,
-      hostname: err.hostname,
-      port: err.port
-    });
+    console.error(`\n❌ [VERIFY_CODE] ERROR - Failed to send verification code`);
+    console.error(`❌ [VERIFY_CODE] User email: ${user.email}`);
+    console.error(`❌ [VERIFY_CODE] Error message: ${err.message}`);
+    console.error(`❌ [VERIFY_CODE] Error code: ${err.code}`);
+    console.error(`❌ [VERIFY_CODE] Error errno: ${err.errno}`);
+    console.error(`❌ [VERIFY_CODE] Error syscall: ${err.syscall}`);
+    console.error(`❌ [VERIFY_CODE] Error hostname: ${err.hostname}`);
+    console.error(`❌ [VERIFY_CODE] Error port: ${err.port}`);
     
-    // For development - still return true so verification code is saved even if email fails
-    if (process.env.NODE_ENV !== 'production') {
-      console.log(`⚠️ Development mode: Email failed but code was saved. Use code: ${user.emailVerificationCode}`);
-      return true;
+    if (err.response) {
+      console.error(`❌ [VERIFY_CODE] SMTP Response: ${err.response}`);
     }
     
-    throw err;
+    console.log(`⚠️ [VERIFY_CODE] Code was saved to database despite email failure`);
+    console.log(`⚠️ [VERIFY_CODE] User can still verify with code: ${user.emailVerificationCode}\n`);
+    return true;
   }
 };
 

@@ -746,24 +746,38 @@ router.post('/send-email-verification-code', async (req, res) => {
   try {
     const { userId } = req.body;
     
+    console.log(`\n🔐 [RESEND_CODE] Request received`);
+    console.log(`🔐 [RESEND_CODE] User ID: ${userId}`);
+    
     if (!userId) {
+      console.warn(`⚠️ [RESEND_CODE] Missing user ID`);
       return res.status(400).json({ error: 'User ID required' });
     }
     
     const user = await User.findById(userId);
     if (!user) {
+      console.warn(`⚠️ [RESEND_CODE] User not found: ${userId}`);
       return res.status(404).json({ error: 'User not found' });
     }
     
+    console.log(`🔐 [RESEND_CODE] User found: ${user.email}`);
+    
     if (user.emailVerified) {
+      console.warn(`⚠️ [RESEND_CODE] Email already verified: ${user.email}`);
       return res.status(400).json({ error: 'Email already verified' });
     }
     
+    console.log(`🔐 [RESEND_CODE] Starting code generation and send process...`);
     await sendEmailVerificationCode(user);
-    logger.info('Email verification code sent', { userId: user._id });
+    
+    console.log(`✅ [RESEND_CODE] Success - Code sent for ${user.email}`);
+    logger.info('Email verification code sent', { userId: user._id, email: user.email });
     
     res.json({ message: 'Verification code sent to your email' });
   } catch (err) {
+    console.error(`\n❌ [RESEND_CODE] ERROR in send-email-verification-code endpoint`);
+    console.error(`❌ [RESEND_CODE] Error message: ${err.message}`);
+    console.error(`❌ [RESEND_CODE] Stack: ${err.stack}\n`);
     logger.error('Send verification code failed', err.message);
     res.status(500).json({ error: 'Failed to send verification code' });
   }
@@ -795,34 +809,52 @@ router.post('/verify-email-code', async (req, res) => {
   try {
     const { userId, code } = req.body;
     
+    console.log(`\n✅ [VERIFY_CODE] Verification attempt received`);
+    console.log(`✅ [VERIFY_CODE] User ID: ${userId}`);
+    console.log(`✅ [VERIFY_CODE] Code submitted: ${code}`);
+    
     if (!userId || !code) {
+      console.warn(`⚠️ [VERIFY_CODE] Missing userId or code`);
       return res.status(400).json({ error: 'User ID and code required' });
     }
     
     const user = await User.findById(userId);
     if (!user) {
+      console.warn(`⚠️ [VERIFY_CODE] User not found: ${userId}`);
       return res.status(404).json({ error: 'User not found' });
     }
     
+    console.log(`✅ [VERIFY_CODE] User found: ${user.email}`);
+    console.log(`✅ [VERIFY_CODE] Stored code: ${user.emailVerificationCode}`);
+    console.log(`✅ [VERIFY_CODE] Code expires at: ${user.emailVerificationCodeExpires}`);
+    
     // Check if code is expired
     if (!user.emailVerificationCodeExpires || new Date() > user.emailVerificationCodeExpires) {
+      console.warn(`⚠️ [VERIFY_CODE] Code expired at ${user.emailVerificationCodeExpires}`);
       return res.status(400).json({ error: 'Verification code has expired' });
     }
     
     // Check if code matches
     if (user.emailVerificationCode !== code) {
+      console.warn(`⚠️ [VERIFY_CODE] Code mismatch!`);
+      console.warn(`⚠️ [VERIFY_CODE] Expected: ${user.emailVerificationCode}, Got: ${code}`);
       return res.status(400).json({ error: 'Invalid verification code' });
     }
     
+    console.log(`✅ [VERIFY_CODE] Code matches! Marking email as verified...`);
     // Mark email as verified
     user.emailVerified = true;
     user.emailVerificationCode = null;
     user.emailVerificationCodeExpires = null;
     await user.save();
     
-    logger.info('Email verified with code', { userId: user._id });
+    console.log(`✅ [VERIFY_CODE] SUCCESS - Email verified for ${user.email}\n`);
+    logger.info('Email verified with code', { userId: user._id, email: user.email });
     res.json({ message: 'Email verified successfully' });
   } catch (err) {
+    console.error(`\n❌ [VERIFY_CODE] ERROR in verify-email-code endpoint`);
+    console.error(`❌ [VERIFY_CODE] Error message: ${err.message}`);
+    console.error(`❌ [VERIFY_CODE] Stack: ${err.stack}\n`);
     logger.error('Email code verification failed', err.message);
     res.status(500).json({ error: 'Email verification failed' });
   }
