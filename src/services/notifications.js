@@ -14,25 +14,29 @@ const isEmailConfigured = () => {
 let transporter = null;
 if (isEmailConfigured()) {
   transporter = nodemailer.createTransport({
-    service: 'gmail',
     host: 'smtp.gmail.com',
-    port: 587,
-    secure: false, // TLS - true would be 465 (SSL)
+    port: 465,  // Changed from 587 to 465 (SSL instead of TLS)
+    secure: true, // Use SSL encryption
     auth: {
       user: process.env.EMAIL_USER,
       pass: process.env.EMAIL_PASSWORD,
     },
-    connectionTimeout: 10000, // 10 seconds
-    socketTimeout: 10000,    // 10 seconds
+    connectionTimeout: 15000, // 15 seconds
+    socketTimeout: 15000,    // 15 seconds
+    greetingTimeout: 10000,  // 10 seconds
     pool: {
       maxConnections: 1,
       maxMessages: 100,
       rateDelta: 1000,
       rateLimit: 5
+    },
+    tls: {
+      rejectUnauthorized: false // Allow self-signed certs
     }
   });
   console.log('✅ Email service configured - using Gmail SMTP');
   console.log(`   From: ${process.env.EMAIL_USER}`);
+  console.log(`   Port: 465 (SSL)`);
 } else {
   console.warn('⚠️ Email service NOT configured');
   console.warn('   EMAIL_USER:', process.env.EMAIL_USER ? '✓ set' : '✗ missing');
@@ -183,11 +187,28 @@ const sendEmailVerificationCode = async (user) => {
     console.log(`📧 [VERIFY_CODE] From: ${mailOptions.from}`);
     console.log(`📧 [VERIFY_CODE] To: ${mailOptions.to}`);
     
-    const sendResult = await transporter.sendMail(mailOptions);
-    console.log(`✅ [VERIFY_CODE] Email sent successfully!`);
-    console.log(`📧 [VERIFY_CODE] Response: ${sendResult.response}`);
-    console.log(`📧 [VERIFY_CODE] Message ID: ${sendResult.messageId}\n`);
-    return true;
+    // Retry logic - try up to 3 times
+    let lastError = null;
+    for (let attempt = 1; attempt <= 3; attempt++) {
+      try {
+        console.log(`📧 [VERIFY_CODE] Attempt ${attempt}/3...`);
+        const sendResult = await transporter.sendMail(mailOptions);
+        console.log(`✅ [VERIFY_CODE] Email sent successfully on attempt ${attempt}!`);
+        console.log(`📧 [VERIFY_CODE] Response: ${sendResult.response}`);
+        console.log(`📧 [VERIFY_CODE] Message ID: ${sendResult.messageId}\n`);
+        return true;
+      } catch (err) {
+        lastError = err;
+        console.warn(`⚠️ [VERIFY_CODE] Attempt ${attempt} failed: ${err.message}`);
+        if (attempt < 3) {
+          // Wait before retrying (1 second * attempt number)
+          await new Promise(resolve => setTimeout(resolve, 1000 * attempt));
+        }
+      }
+    }
+    
+    // All retries failed
+    throw lastError;
   } catch (err) {
     console.error(`\n❌ [VERIFY_CODE] ERROR - Failed to send verification code`);
     console.error(`❌ [VERIFY_CODE] User email: ${user.email}`);
