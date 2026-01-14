@@ -31,8 +31,13 @@ if (isEmailConfigured()) {
       rateLimit: 5
     }
   });
+  console.log('✅ Email service configured - using Gmail SMTP');
+  console.log(`   From: ${process.env.EMAIL_USER}`);
 } else {
-  console.warn('⚠️ Email service not configured - verification emails will be logged to console instead');
+  console.warn('⚠️ Email service NOT configured');
+  console.warn('   EMAIL_USER:', process.env.EMAIL_USER ? '✓ set' : '✗ missing');
+  console.warn('   EMAIL_PASSWORD:', process.env.EMAIL_PASSWORD ? '✓ set' : '✗ missing');
+  console.warn('   Verification emails will be logged to console instead');
 }
 
 // Twilio configuration
