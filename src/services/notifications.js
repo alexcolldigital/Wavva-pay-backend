@@ -37,6 +37,18 @@ if (isEmailConfigured()) {
   console.log('✅ Email service configured - using Gmail SMTP');
   console.log(`   From: ${process.env.EMAIL_USER}`);
   console.log(`   Port: 465 (SSL)`);
+  
+  // Verify transporter connection on startup (non-blocking)
+  transporter.verify((error, success) => {
+    if (error) {
+      console.error('⚠️ Email service verification failed:', error.message);
+      console.error('   This may indicate authentication issues with Gmail.');
+      console.error('   Make sure you are using an App Password, not your regular password.');
+      console.error('   See EMAIL_SETUP.md for configuration instructions.');
+    } else if (success) {
+      console.log('✅ Email service verified - SMTP connection successful');
+    }
+  });
 } else {
   console.warn('⚠️ Email service NOT configured');
   console.warn('   EMAIL_USER:', process.env.EMAIL_USER ? '✓ set' : '✗ missing');
@@ -187,7 +199,7 @@ const sendEmailVerificationCode = async (user) => {
     console.log(`📧 [VERIFY_CODE] From: ${mailOptions.from}`);
     console.log(`📧 [VERIFY_CODE] To: ${mailOptions.to}`);
     
-    // Retry logic - try up to 3 times
+    // Retry logic - try up to 3 times with exponential backoff
     let lastError = null;
     for (let attempt = 1; attempt <= 3; attempt++) {
       try {
@@ -199,10 +211,12 @@ const sendEmailVerificationCode = async (user) => {
         return true;
       } catch (err) {
         lastError = err;
+        const waitTime = Math.pow(2, attempt - 1) * 1000; // Exponential backoff: 1s, 2s, 4s
         console.warn(`⚠️ [VERIFY_CODE] Attempt ${attempt} failed: ${err.message}`);
+        
         if (attempt < 3) {
-          // Wait before retrying (1 second * attempt number)
-          await new Promise(resolve => setTimeout(resolve, 1000 * attempt));
+          console.log(`📧 [VERIFY_CODE] Retrying in ${waitTime}ms...`);
+          await new Promise(resolve => setTimeout(resolve, waitTime));
         }
       }
     }
@@ -213,14 +227,26 @@ const sendEmailVerificationCode = async (user) => {
     console.error(`\n❌ [VERIFY_CODE] ERROR - Failed to send verification code`);
     console.error(`❌ [VERIFY_CODE] User email: ${user.email}`);
     console.error(`❌ [VERIFY_CODE] Error message: ${err.message}`);
-    console.error(`❌ [VERIFY_CODE] Error code: ${err.code}`);
-    console.error(`❌ [VERIFY_CODE] Error errno: ${err.errno}`);
-    console.error(`❌ [VERIFY_CODE] Error syscall: ${err.syscall}`);
-    console.error(`❌ [VERIFY_CODE] Error hostname: ${err.hostname}`);
-    console.error(`❌ [VERIFY_CODE] Error port: ${err.port}`);
+    console.error(`❌ [VERIFY_CODE] Error code: ${err.code || 'N/A'}`);
+    
+    // Only log network-specific errors if they exist
+    if (err.errno) console.error(`❌ [VERIFY_CODE] Error errno: ${err.errno}`);
+    if (err.syscall) console.error(`❌ [VERIFY_CODE] Error syscall: ${err.syscall}`);
+    if (err.hostname) console.error(`❌ [VERIFY_CODE] Error hostname: ${err.hostname}`);
+    if (err.port) console.error(`❌ [VERIFY_CODE] Error port: ${err.port}`);
+    if (err.address) console.error(`❌ [VERIFY_CODE] Error address: ${err.address}`);
     
     if (err.response) {
       console.error(`❌ [VERIFY_CODE] SMTP Response: ${err.response}`);
+    }
+    
+    if (err.command) {
+      console.error(`❌ [VERIFY_CODE] SMTP Command: ${err.command}`);
+    }
+    
+    // Log full error for debugging if in development
+    if (process.env.NODE_ENV === 'development') {
+      console.error(`❌ [VERIFY_CODE] Full error object:`, err);
     }
     
     console.log(`⚠️ [VERIFY_CODE] Code was saved to database despite email failure`);

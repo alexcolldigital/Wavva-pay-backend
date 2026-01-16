@@ -1,5 +1,42 @@
 # Email Verification Code Not Sending - Debugging Guide
 
+## Current Error: "Error port: undefined" 
+
+If you're seeing errors like:
+```
+❌ [VERIFY_CODE] Error port: undefined
+❌ [VERIFY_CODE] Error hostname: undefined
+❌ [VERIFY_CODE] Error syscall: undefined
+❌ [VERIFY_CODE] Error errno: undefined
+⚠️ [VERIFY_CODE] Code was saved to database despite email failure
+```
+
+This means the SMTP connection itself is failing. **The good news:** Your verification code is still saved in the database and users can still verify their email.
+
+### Common Causes & Quick Fixes
+
+1. **Gmail Password Issue (Most Common)**
+   - You're using your regular Gmail password instead of App Password
+   - **Fix:** Go to https://myaccount.google.com/apppasswords and generate a new 16-character App Password
+   - Update `.env`: `EMAIL_PASSWORD=your-16-char-app-password`
+   - Restart the server
+
+2. **2-Step Verification Not Enabled**
+   - Gmail requires 2-Step Verification before App Passwords
+   - **Fix:** Go to https://myaccount.google.com/security and enable 2-Step Verification
+   - Then generate App Password
+
+3. **Wrong Email Format**
+   - Check `.env` for typos in EMAIL_USER
+   - Make sure it's a valid Gmail address
+
+4. **Network/Firewall Blocking**
+   - Some networks block SMTP ports
+   - **Test:** Try from a different network (mobile hotspot)
+   - **Fix:** If corporate network, contact IT department
+
+---
+
 ## Quick Checklist
 
 ### 1. Verify Environment Variables Are Set
