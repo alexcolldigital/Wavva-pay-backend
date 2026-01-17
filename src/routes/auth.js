@@ -221,7 +221,14 @@ router.post('/signup', async (req, res) => {
     // Don't await - this prevents blocking the signup response
     console.log('[DEBUG] Sending email verification (async)...');
     sendEmailVerificationCode(user)
-      .then(() => console.log('[DEBUG] Email sent successfully'))
+      .then((result) => {
+        if (result.emailSent) {
+          console.log('[DEBUG] Email sent successfully');
+        } else {
+          console.warn(`[WARN] Email not sent: ${result.error || 'Unknown reason'}`);
+          console.log(`[DEBUG] Code available for verification: ${result.code}`);
+        }
+      })
       .catch(emailErr => console.error('[WARN] Email sending failed (non-critical):', emailErr.message));
     
     console.log('[DEBUG] Generating tokens...');
@@ -768,18 +775,33 @@ router.post('/send-email-verification-code', async (req, res) => {
     }
     
     console.log(`🔐 [RESEND_CODE] Starting code generation and send process...`);
-    await sendEmailVerificationCode(user);
+    const result = await sendEmailVerificationCode(user);
     
-    console.log(`✅ [RESEND_CODE] Success - Code sent for ${user.email}`);
+    console.log(`✅ [RESEND_CODE] Success - Code generated for ${user.email}`);
+    console.log(`🔐 [RESEND_CODE] Email sent: ${result.emailSent}`);
+    
+    if (!result.emailSent) {
+      console.warn(`⚠️ [RESEND_CODE] Email delivery failed: ${result.error}`);
+      logger.warn('Email verification code generated but not sent', { userId: user._id, email: user.email, error: result.error });
+      return res.status(202).json({ 
+        message: 'Verification code generated',
+        code_sent: false,
+        warning: 'Code was generated but email delivery failed. Code available for verification.',
+        details: result.error 
+      });
+    }
+    
     logger.info('Email verification code sent', { userId: user._id, email: user.email });
-    
-    res.json({ message: 'Verification code sent to your email' });
+    res.json({ 
+      message: 'Verification code sent to your email',
+      code_sent: true
+    });
   } catch (err) {
     console.error(`\n❌ [RESEND_CODE] ERROR in send-email-verification-code endpoint`);
     console.error(`❌ [RESEND_CODE] Error message: ${err.message}`);
     console.error(`❌ [RESEND_CODE] Stack: ${err.stack}\n`);
     logger.error('Send verification code failed', err.message);
-    res.status(500).json({ error: 'Failed to send verification code' });
+    res.status(500).json({ error: 'Failed to send verification code', details: err.message });
   }
 });
 
@@ -888,13 +910,26 @@ router.post('/resend-verification-code', async (req, res) => {
     
     // Send new verification code
     const { sendEmailVerificationCode } = require('../services/notifications');
-    await sendEmailVerificationCode(user);
+    const result = await sendEmailVerificationCode(user);
+    
+    if (!result.emailSent) {
+      console.warn(`⚠️ [RESEND_CODE] Email delivery failed: ${result.error}`);
+      logger.warn('Verification code generated but not sent', { userId: user._id, email: user.email, error: result.error });
+      return res.status(202).json({ 
+        message: 'Verification code generated',
+        code_sent: false,
+        warning: 'Code was generated but email delivery failed. Code available for verification.'
+      });
+    }
     
     logger.info('Verification code resent', { userId: user._id, email: user.email });
-    res.json({ message: 'Verification code sent to your email' });
+    res.json({ 
+      message: 'Verification code sent to your email',
+      code_sent: true
+    });
   } catch (err) {
     logger.error('Resend verification code failed', err.message);
-    res.status(500).json({ error: 'Failed to resend verification code' });
+    res.status(500).json({ error: 'Failed to resend verification code', details: err.message });
   }
 });
 

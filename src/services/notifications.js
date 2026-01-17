@@ -167,6 +167,7 @@ const sendEmailVerification = async (user) => {
 };
 
 // Send email verification code (6-digit code)
+// Returns: { success: boolean, code: string, emailSent: boolean, error?: string }
 const sendEmailVerificationCode = async (user) => {
   try {
     const code = Math.floor(100000 + Math.random() * 900000).toString();
@@ -181,11 +182,17 @@ const sendEmailVerificationCode = async (user) => {
     await user.save();
     console.log(`✅ [VERIFY_CODE] Code saved to database for ${user.email}`);
 
+    // If no transporter, return success with code but no email sent
     if (!transporter) {
       console.warn(`⚠️ [VERIFY_CODE] Email transporter not initialized`);
       console.log(`📧 [VERIFY_CODE] Development mode: Code available in logs`);
       console.log(`📧 [VERIFY_CODE] ${user.email} - Code: ${code}`);
-      return true;
+      return {
+        success: true,
+        code: code,
+        emailSent: false,
+        error: 'Email service not configured'
+      };
     }
 
     const mailOptions = {
@@ -208,14 +215,18 @@ const sendEmailVerificationCode = async (user) => {
         console.log(`✅ [VERIFY_CODE] Email sent successfully on attempt ${attempt}!`);
         console.log(`📧 [VERIFY_CODE] Response: ${sendResult.response}`);
         console.log(`📧 [VERIFY_CODE] Message ID: ${sendResult.messageId}\n`);
-        return true;
+        return {
+          success: true,
+          code: code,
+          emailSent: true,
+          error: null
+        };
       } catch (err) {
         lastError = err;
         const waitTime = Math.pow(2, attempt - 1) * 1000; // Exponential backoff: 1s, 2s, 4s
-        console.warn(`⚠️ [VERIFY_CODE] Attempt ${attempt} failed: ${err.message}`);
+        console.warn(`⚠️ [VERIFY_CODE] Attempt ${attempt}/3 failed: ${err.message}`);
         
         if (attempt < 3) {
-          console.log(`📧 [VERIFY_CODE] Retrying in ${waitTime}ms...`);
           await new Promise(resolve => setTimeout(resolve, waitTime));
         }
       }
@@ -227,31 +238,20 @@ const sendEmailVerificationCode = async (user) => {
     console.error(`\n❌ [VERIFY_CODE] ERROR - Failed to send verification code`);
     console.error(`❌ [VERIFY_CODE] User email: ${user.email}`);
     console.error(`❌ [VERIFY_CODE] Error message: ${err.message}`);
-    console.error(`❌ [VERIFY_CODE] Error code: ${err.code || 'N/A'}`);
-    
-    // Only log network-specific errors if they exist
-    if (err.errno) console.error(`❌ [VERIFY_CODE] Error errno: ${err.errno}`);
-    if (err.syscall) console.error(`❌ [VERIFY_CODE] Error syscall: ${err.syscall}`);
-    if (err.hostname) console.error(`❌ [VERIFY_CODE] Error hostname: ${err.hostname}`);
-    if (err.port) console.error(`❌ [VERIFY_CODE] Error port: ${err.port}`);
-    if (err.address) console.error(`❌ [VERIFY_CODE] Error address: ${err.address}`);
-    
-    if (err.response) {
-      console.error(`❌ [VERIFY_CODE] SMTP Response: ${err.response}`);
+    if (err.code) {
+      console.error(`❌ [VERIFY_CODE] Error code: ${err.code}`);
     }
     
-    if (err.command) {
-      console.error(`❌ [VERIFY_CODE] SMTP Command: ${err.command}`);
-    }
+    console.log(`\n⚠️ [VERIFY_CODE] Code was saved to database despite email failure`);
+    console.log(`⚠️ [VERIFY_CODE] User can still verify with code: ${user.emailVerificationCode}`);
     
-    // Log full error for debugging if in development
-    if (process.env.NODE_ENV === 'development') {
-      console.error(`❌ [VERIFY_CODE] Full error object:`, err);
-    }
-    
-    console.log(`⚠️ [VERIFY_CODE] Code was saved to database despite email failure`);
-    console.log(`⚠️ [VERIFY_CODE] User can still verify with code: ${user.emailVerificationCode}\n`);
-    return true;
+    // Return status object with error info
+    return {
+      success: true, // Code was saved
+      code: user.emailVerificationCode,
+      emailSent: false,
+      error: err.message || 'Failed to send email'
+    };
   }
 };
 
@@ -286,7 +286,7 @@ const sendOTP = async (user) => {
 
     return true;
   } catch (err) {
-    console.error('OTP send error:', err);
+    console.error('OTP send error:', err.message);
     return false;
   }
 };
@@ -315,7 +315,7 @@ const sendPaymentConfirmation = async (sender, receiver, amount, currency, trans
 
     return true;
   } catch (err) {
-    console.error('Confirmation email error:', err);
+    console.error('Confirmation email error:', err.message);
     return false;
   }
 };
@@ -333,7 +333,7 @@ const sendCombineInvitation = async (member, combiner, combineName, amount) => {
     await transporter.sendMail(mailOptions);
     return true;
   } catch (err) {
-    console.error('Combine invitation error:', err);
+    console.error('Combine invitation error:', err.message);
     return false;
   }
 };
