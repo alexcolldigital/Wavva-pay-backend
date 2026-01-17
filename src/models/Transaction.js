@@ -22,7 +22,11 @@ const transactionSchema = new mongoose.Schema({
   chimonyTransactionId: String,
   chimonyStatus: { type: String, default: 'pending' },
   
-  // Flutterwave integration
+  // Paystack integration
+  paystackTransactionId: String,
+  paystackReference: String,
+  
+  // Flutterwave integration (deprecated but kept for backward compatibility)
   flutterwaveTransactionId: String,
   flutterwaveReference: String,
   
@@ -38,7 +42,7 @@ const transactionSchema = new mongoose.Schema({
   },
   
   // Metadata
-  method: String, // bank_transfer, mobile_money, flutterwave, internal, etc.
+  method: String, // bank_transfer, mobile_money, paystack, internal, etc.
   metadata: mongoose.Schema.Types.Mixed,
   
   createdAt: { type: Date, default: Date.now },
@@ -46,4 +50,3 @@ const transactionSchema = new mongoose.Schema({
 }, { timestamps: true });
 
 module.exports = mongoose.model('Transaction', transactionSchema);
-

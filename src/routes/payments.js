@@ -3,7 +3,7 @@ const authMiddleware = require('../middleware/auth');
 const User = require('../models/User');
 const Wallet = require('../models/Wallet');
 const Transaction = require('../models/Transaction');
-const { createTransfer, getTransferStatus, getBankList, initiateBankTransfer, resolveBankAccount } = require('../services/flutterwave');
+const { createTransfer, getTransferStatus, getBankList, createTransferRecipient, resolveBankAccount } = require('../services/paystack');
 const { calculateFee } = require('../utils/feeCalculator');
 const router = express.Router();
 
@@ -223,7 +223,7 @@ router.get('/transaction-status/:transactionId', authMiddleware, async (req, res
   }
 });
 
-// Initialize Flutterwave payment for adding funds
+// Initialize Paystack payment for adding funds
 router.post('/fund/initialize', authMiddleware, async (req, res) => {
   try {
     const { amount, currency = 'NGN' } = req.body;
@@ -234,11 +234,10 @@ router.post('/fund/initialize', authMiddleware, async (req, res) => {
       return res.status(400).json({ error: 'Invalid amount' });
     }
 
-    // Validate currency (only USD and NGN allowed)
-    const validCurrencies = ['USD', 'NGN'];
-    if (!validCurrencies.includes(currency)) {
+    // Validate currency (only NGN allowed for now)
+    if (currency !== 'NGN') {
       return res.status(400).json({ 
-        error: 'Invalid currency. Only USD and NGN are supported.' 
+        error: 'Only NGN currency is supported for wallet funding' 
       });
     }
 
@@ -247,7 +246,7 @@ router.post('/fund/initialize', authMiddleware, async (req, res) => {
       return res.status(404).json({ error: 'User not found' });
     }
 
-    const { initializePayment } = require('../services/flutterwave');
+    const { initializePayment } = require('../services/paystack');
     
     // Get request origin for multi-URL support
     const requestOrigin = req.headers.origin || req.headers.referer?.split('/').slice(0, 3).join('/')
@@ -266,8 +265,9 @@ router.post('/fund/initialize', authMiddleware, async (req, res) => {
 
     res.json({
       success: true,
-      paymentLink: paymentResult.paymentLink,
-      transactionRef: paymentResult.transactionRef,
+      authorizationUrl: paymentResult.authorizationUrl,
+      accessCode: paymentResult.accessCode,
+      reference: paymentResult.reference,
     });
   } catch (err) {
     console.error('Fund initialization error:', err);
@@ -275,16 +275,16 @@ router.post('/fund/initialize', authMiddleware, async (req, res) => {
   }
 });
 
-// Verify Flutterwave payment and credit wallet
+// Verify Paystack payment and credit wallet
 router.post('/fund/verify', authMiddleware, async (req, res) => {
   try {
-    const { transactionId } = req.body;
+    const { reference } = req.body;
     const userId = req.userId;
 
-    console.log('🔍 Payment verification started:', { userId, transactionId });
+    console.log('🔍 Payment verification started:', { userId, reference });
 
-    if (!transactionId) {
-      return res.status(400).json({ error: 'Transaction ID required' });
+    if (!reference) {
+      return res.status(400).json({ error: 'Payment reference required' });
     }
 
     const user = await User.findById(userId).populate('walletId');
@@ -298,10 +298,10 @@ router.post('/fund/verify', authMiddleware, async (req, res) => {
       return res.status(404).json({ error: 'User wallet not found' });
     }
 
-    const { verifyPayment } = require('../services/flutterwave');
-    const verificationResult = await verifyPayment(transactionId);
+    const { verifyPayment } = require('../services/paystack');
+    const verificationResult = await verifyPayment(reference);
 
-    console.log('✓ Flutterwave verification result:', verificationResult);
+    console.log('✓ Paystack verification result:', verificationResult);
 
     if (!verificationResult.success) {
       console.error('❌ Verification failed:', verificationResult);
@@ -313,7 +313,7 @@ router.post('/fund/verify', authMiddleware, async (req, res) => {
 
     // Create transaction record
     const amountInCents = Math.round(verificationResult.amount * 100);
-    const { feeAmount, netAmount, feePercentage } = calculateFee(amountInCents, verificationResult.currency, 'wallet_funding');
+    const { feeAmount, netAmount, feePercentage } = calculateFee(amountInCents, 'NGN', 'wallet_funding');
     
     const transaction = new Transaction({
       sender: userId,
@@ -325,9 +325,9 @@ router.post('/fund/verify', authMiddleware, async (req, res) => {
       netAmount,
       type: 'wallet_funding',
       status: 'completed',
-      method: 'flutterwave',
-      flutterwaveTransactionId: verificationResult.transactionId,
-      flutterwaveReference: verificationResult.reference,
+      method: 'paystack',
+      paystackReference: verificationResult.reference,
+      paystackTransactionId: verificationResult.transactionId,
       description: `Wallet funding via ${verificationResult.paymentMethod}`,
     });
 
@@ -340,14 +340,14 @@ router.post('/fund/verify', authMiddleware, async (req, res) => {
       return res.status(404).json({ error: 'Wallet not found' });
     }
 
-    // Get or create currency-specific wallet
-    const currencyWallet = wallet.getOrCreateWallet(verificationResult.currency);
+    // Get or create currency-specific wallet (NGN only for now)
+    const currencyWallet = wallet.getOrCreateWallet('NGN');
     const previousBalance = currencyWallet.balance;
     const creditAmount = netAmount; // Credit only net amount (after fee)
     
     console.log('💰 Updating wallet balance:', {
       userId,
-      currency: verificationResult.currency,
+      currency: 'NGN',
       previousBalance,
       creditAmount,
       newBalance: previousBalance + creditAmount
@@ -361,7 +361,7 @@ router.post('/fund/verify', authMiddleware, async (req, res) => {
     
     await wallet.save();
 
-    console.log(`✅ Wallet updated: ${userId} | Currency: ${verificationResult.currency} | Previous: ${previousBalance} | Gross: ${amountInCents} | Fee: ${feeAmount} | Net: ${creditAmount} | New: ${currencyWallet.balance}`);
+    console.log(`✅ Wallet updated: ${userId} | Currency: NGN | Previous: ${previousBalance} | Gross: ${amountInCents} | Fee: ${feeAmount} | Net: ${creditAmount} | New: ${currencyWallet.balance}`);
 
     res.json({
       success: true,
@@ -374,7 +374,7 @@ router.post('/fund/verify', authMiddleware, async (req, res) => {
           amount: (feeAmount / 100).toFixed(2)
         },
         netAmount: (creditAmount / 100).toFixed(2),
-        currency: verificationResult.currency
+        currency: 'NGN'
       },
       newBalance: currencyWallet.balance / 100,
     });
@@ -387,10 +387,8 @@ router.post('/fund/verify', authMiddleware, async (req, res) => {
 // Get list of supported banks
 router.get('/banks', authMiddleware, async (req, res) => {
   try {
-    const { country = 'NG' } = req.query;
-    
-    const { getBankList } = require('../services/flutterwave');
-    const banksResult = await getBankList(country);
+    const { getBankList } = require('../services/paystack');
+    const banksResult = await getBankList();
 
     if (!banksResult.success) {
       return res.status(400).json({ error: banksResult.error });
@@ -409,15 +407,15 @@ router.get('/banks', authMiddleware, async (req, res) => {
 // Resolve bank account details
 router.post('/resolve-account', authMiddleware, async (req, res) => {
   try {
-    const { account_number, account_bank } = req.body;
+    const { account_number, bank_code } = req.body;
 
     // Validation
-    if (!account_number || !account_bank) {
+    if (!account_number || !bank_code) {
       return res.status(400).json({ error: 'Account number and bank code required' });
     }
 
-    const { resolveBankAccount } = require('../services/flutterwave');
-    const resolveResult = await resolveBankAccount(account_number, account_bank);
+    const { resolveBankAccount } = require('../services/paystack');
+    const resolveResult = await resolveBankAccount(account_number, bank_code);
 
     if (!resolveResult.success) {
       return res.status(400).json({ error: resolveResult.error });
@@ -437,19 +435,18 @@ router.post('/resolve-account', authMiddleware, async (req, res) => {
 // Initiate bank transfer
 router.post('/bank-transfer', authMiddleware, async (req, res) => {
   try {
-    const { account_number, account_bank, amount, currency = 'NGN', description } = req.body;
+    const { account_number, bank_code, amount, currency = 'NGN', description } = req.body;
     const userId = req.userId;
 
     // Validation
-    if (!account_number || !account_bank || !amount || amount <= 0) {
+    if (!account_number || !bank_code || !amount || amount <= 0) {
       return res.status(400).json({ error: 'Invalid account details or amount' });
     }
 
-    // Validate currency (only USD and NGN allowed)
-    const validCurrencies = ['USD', 'NGN'];
-    if (!validCurrencies.includes(currency)) {
+    // Validate currency (only NGN allowed for now)
+    if (currency !== 'NGN') {
       return res.status(400).json({ 
-        error: 'Invalid currency. Only USD and NGN are supported.' 
+        error: 'Only NGN currency is supported for bank transfers' 
       });
     }
 
@@ -473,13 +470,31 @@ router.post('/bank-transfer', authMiddleware, async (req, res) => {
       return res.status(400).json({ error: 'Insufficient balance to cover amount and fee' });
     }
 
-    // Initiate bank transfer
-    const { initiateBankTransfer } = require('../services/flutterwave');
-    const transferResult = await initiateBankTransfer(
+    // First, resolve the bank account to verify it exists
+    const { resolveBankAccount, createTransferRecipient } = require('../services/paystack');
+    const resolveResult = await resolveBankAccount(account_number, bank_code);
+    
+    if (!resolveResult.success) {
+      return res.status(400).json({ error: 'Invalid bank account: ' + resolveResult.error });
+    }
+
+    // Create transfer recipient
+    const recipientResult = await createTransferRecipient(
       account_number,
-      account_bank,
+      bank_code,
+      resolveResult.accountName,
+      'nuban'
+    );
+
+    if (!recipientResult.success) {
+      return res.status(400).json({ error: 'Failed to create recipient: ' + recipientResult.error });
+    }
+
+    // Initiate bank transfer
+    const { createTransfer } = require('../services/paystack');
+    const transferResult = await createTransfer(
+      recipientResult.recipientCode,
       amount,
-      currency,
       description || 'Payment from Wavva Pay'
     );
 
@@ -499,13 +514,13 @@ router.post('/bank-transfer', authMiddleware, async (req, res) => {
       type: 'payout',
       status: 'pending', // Will update when bank confirms
       method: 'bank_transfer',
-      flutterwaveTransactionId: transferResult.transferId,
-      flutterwaveReference: transferResult.reference,
+      paystackReference: transferResult.reference,
+      paystackTransactionId: transferResult.transferId,
       description: description || `Bank transfer to ${account_number}`,
       metadata: {
         accountNumber: account_number,
-        accountBank: account_bank,
-        accountName: transferResult.accountName,
+        bankCode: bank_code,
+        accountName: resolveResult.accountName,
       },
     });
 
@@ -523,7 +538,7 @@ router.post('/bank-transfer', authMiddleware, async (req, res) => {
       reference: transferResult.reference,
       status: transferResult.status,
       message: 'Bank transfer initiated',
-      accountName: transferResult.accountName,
+      accountName: resolveResult.accountName,
       transfer: {
         amount: (amountInCents / 100).toFixed(2),
         fee: {
@@ -548,7 +563,7 @@ router.get('/bank-transfer/:transferId', authMiddleware, async (req, res) => {
 
     // Find the transaction
     const transaction = await Transaction.findOne({
-      flutterwaveTransactionId: transferId,
+      paystackTransactionId: transferId,
       sender: userId,
     });
 
@@ -556,8 +571,8 @@ router.get('/bank-transfer/:transferId', authMiddleware, async (req, res) => {
       return res.status(404).json({ error: 'Transfer not found' });
     }
 
-    // Get status from Flutterwave
-    const { getTransferStatus } = require('../services/flutterwave');
+    // Get status from Paystack
+    const { getTransferStatus } = require('../services/paystack');
     const statusResult = await getTransferStatus(transferId);
 
     if (!statusResult.success) {
@@ -577,7 +592,7 @@ router.get('/bank-transfer/:transferId', authMiddleware, async (req, res) => {
       status: statusResult.status,
       amount: transaction.amount / 100,
       currency: transaction.currency,
-      reference: transaction.flutterwaveReference,
+      reference: transaction.paystackReference,
       accountNumber: transaction.metadata?.accountNumber,
       accountName: transaction.metadata?.accountName,
       createdAt: transaction.createdAt,
