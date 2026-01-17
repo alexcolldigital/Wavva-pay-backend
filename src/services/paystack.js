@@ -61,6 +61,7 @@ const initializePayment = async (email, amount, currency = 'NGN', metadata = {},
       authorizationUrl: response.data.data.authorization_url,
       accessCode: response.data.data.access_code,
       reference,
+      email,
       status: response.data.status,
     };
   } catch (err) {
