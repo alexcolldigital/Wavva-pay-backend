@@ -268,6 +268,7 @@ router.post('/fund/initialize', authMiddleware, async (req, res) => {
       authorizationUrl: paymentResult.authorizationUrl,
       accessCode: paymentResult.accessCode,
       reference: paymentResult.reference,
+      email: user.email,
     });
   } catch (err) {
     console.error('Fund initialization error:', err);
