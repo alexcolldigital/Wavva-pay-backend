@@ -1,0 +1,386 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Wavva Pay Advanced Features Test</title>
+    <style>
+        body { font-family: Arial, sans-serif; margin: 20px; background: #f5f5f5; }
+        .container { max-width: 1200px; margin: 0 auto; }
+        .feature-card { background: white; padding: 20px; margin: 10px 0; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
+        .feature-title { color: #2c3e50; border-bottom: 2px solid #3498db; padding-bottom: 10px; }
+        button { background: #3498db; color: white; border: none; padding: 10px 20px; border-radius: 4px; cursor: pointer; margin: 5px; }
+        button:hover { background: #2980b9; }
+        .result { background: #ecf0f1; padding: 10px; margin: 10px 0; border-radius: 4px; font-family: monospace; }
+        .success { background: #d5f4e6; color: #27ae60; }
+        .error { background: #fadbd8; color: #e74c3c; }
+        input, textarea { width: 100%; padding: 8px; margin: 5px 0; border: 1px solid #ddd; border-radius: 4px; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🚀 Wavva Pay Advanced Features Test</h1>
+        <p>Server: <span id="server-status">Checking...</span></p>
+
+        <!-- AI Agent Features -->
+        <div class="feature-card">
+            <h2 class="feature-title">🤖 AI Agent Features</h2>
+            <button onclick="testInvoiceProcessing()">Process Invoice</button>
+            <button onclick="testDynamicBudget()">Generate Budget</button>
+            <button onclick="testCashFlowPrediction()">Cash Flow Prediction</button>
+            <button onclick="testAIInsights()">Get AI Insights</button>
+            <div id="ai-results" class="result"></div>
+        </div>
+
+        <!-- Embedded Finance -->
+        <div class="feature-card">
+            <h2 class="feature-title">🔗 Embedded Finance</h2>
+            <input type="text" id="partner-name" placeholder="Partner Name" value="Test Partner">
+            <button onclick="registerPartner()">Register Partner</button>
+            <button onclick="testEmbeddedPayment()">Test Payment</button>
+            <button onclick="testEmbeddedWallet()">Create Wallet</button>
+            <div id="embedded-results" class="result"></div>
+        </div>
+
+        <!-- Blockchain Assets -->
+        <div class="feature-card">
+            <h2 class="feature-title">⛓️ Blockchain Assets</h2>
+            <input type="text" id="token-name" placeholder="Token Name" value="Test Yield Token">
+            <input type="text" id="token-symbol" placeholder="Symbol" value="TYT">
+            <button onclick="createToken()">Create Token</button>
+            <button onclick="investInToken()">Invest in Token</button>
+            <button onclick="getPortfolio()">View Portfolio</button>
+            <div id="blockchain-results" class="result"></div>
+        </div>
+
+        <!-- Predictive Insights -->
+        <div class="feature-card">
+            <h2 class="feature-title">🧠 Predictive Insights</h2>
+            <button onclick="analyzeBehavior()">Analyze Behavior</button>
+            <button onclick="getPredictions()">Get Predictions</button>
+            <button onclick="getRealtimeInsights()">Realtime Insights</button>
+            <div id="insights-results" class="result"></div>
+        </div>
+
+        <!-- Voice & Biometric -->
+        <div class="feature-card">
+            <h2 class="feature-title">🎤 Voice & Biometric</h2>
+            <button onclick="enrollVoice()">Enroll Voice</button>
+            <button onclick="authenticateVoice()">Authenticate Voice</button>
+            <button onclick="enrollBiometric()">Enroll Biometric</button>
+            <button onclick="startVoiceSession()">Start Voice Session</button>
+            <div id="voice-results" class="result"></div>
+        </div>
+
+        <!-- Gamification -->
+        <div class="feature-card">
+            <h2 class="feature-title">🎮 Gamification</h2>
+            <button onclick="getChallenges()">Get Challenges</button>
+            <button onclick="getLeaderboard()">View Leaderboard</button>
+            <div id="game-results" class="result"></div>
+        </div>
+    </div>
+
+    <script>
+        const API_BASE = 'http://localhost:5000/api';
+        let currentToken = null;
+        let currentApiKey = null;
+        let currentTokenId = null;
+
+        // Check server status
+        async function checkServer() {
+            try {
+                const response = await fetch(`${API_BASE}/test`);
+                const data = await response.json();
+                document.getElementById('server-status').innerHTML = '✅ Connected';
+                document.getElementById('server-status').className = 'success';
+            } catch (error) {
+                document.getElementById('server-status').innerHTML = '❌ Disconnected';
+                document.getElementById('server-status').className = 'error';
+            }
+        }
+
+        // Helper function to make API calls
+        async function apiCall(endpoint, method = 'GET', body = null, useApiKey = false) {
+            const headers = { 'Content-Type': 'application/json' };
+            if (currentToken && !useApiKey) headers.Authorization = `Bearer ${currentToken}`;
+            if (useApiKey && currentApiKey) headers.apiKey = currentApiKey;
+
+            const response = await fetch(`${API_BASE}${endpoint}`, {
+                method,
+                headers,
+                body: body ? JSON.stringify(body) : null
+            });
+            return await response.json();
+        }
+
+        // AI Agent Functions
+        async function testInvoiceProcessing() {
+            try {
+                const result = await apiCall('/advanced/ai/process-invoice', 'POST', {
+                    invoiceData: 'mock-invoice-data'
+                });
+                document.getElementById('ai-results').innerHTML = `✅ Invoice processed: ${JSON.stringify(result, null, 2)}`;
+                document.getElementById('ai-results').className = 'result success';
+            } catch (error) {
+                document.getElementById('ai-results').innerHTML = `❌ Error: ${error.message}`;
+                document.getElementById('ai-results').className = 'result error';
+            }
+        }
+
+        async function testDynamicBudget() {
+            try {
+                const result = await apiCall('/advanced/ai/dynamic-budget');
+                document.getElementById('ai-results').innerHTML = `✅ Budget generated: ${JSON.stringify(result, null, 2)}`;
+                document.getElementById('ai-results').className = 'result success';
+            } catch (error) {
+                document.getElementById('ai-results').innerHTML = `❌ Error: ${error.message}`;
+                document.getElementById('ai-results').className = 'result error';
+            }
+        }
+
+        async function testCashFlowPrediction() {
+            try {
+                const result = await apiCall('/advanced/ai/cash-flow-prediction?days=30');
+                document.getElementById('ai-results').innerHTML = `✅ Cash flow predicted: ${JSON.stringify(result, null, 2)}`;
+                document.getElementById('ai-results').className = 'result success';
+            } catch (error) {
+                document.getElementById('ai-results').innerHTML = `❌ Error: ${error.message}`;
+                document.getElementById('ai-results').className = 'result error';
+            }
+        }
+
+        async function testAIInsights() {
+            try {
+                const result = await apiCall('/advanced/ai/insights');
+                document.getElementById('ai-results').innerHTML = `✅ AI insights: ${JSON.stringify(result, null, 2)}`;
+                document.getElementById('ai-results').className = 'result success';
+            } catch (error) {
+                document.getElementById('ai-results').innerHTML = `❌ Error: ${error.message}`;
+                document.getElementById('ai-results').className = 'result error';
+            }
+        }
+
+        // Embedded Finance Functions
+        async function registerPartner() {
+            try {
+                const partnerName = document.getElementById('partner-name').value;
+                const result = await apiCall('/advanced/embedded/register-partner', 'POST', {
+                    id: 'test-partner-' + Date.now(),
+                    name: partnerName,
+                    domain: 'testpartner.com',
+                    permissions: ['payments', 'wallets']
+                });
+                currentApiKey = result.data.apiKey;
+                document.getElementById('embedded-results').innerHTML = `✅ Partner registered: ${JSON.stringify(result, null, 2)}`;
+                document.getElementById('embedded-results').className = 'result success';
+            } catch (error) {
+                document.getElementById('embedded-results').innerHTML = `❌ Error: ${error.message}`;
+                document.getElementById('embedded-results').className = 'result error';
+            }
+        }
+
+        async function testEmbeddedPayment() {
+            if (!currentApiKey) {
+                alert('Please register a partner first');
+                return;
+            }
+            try {
+                const result = await apiCall('/advanced/embedded/payment', 'POST', {
+                    amount: 10000,
+                    currency: 'NGN',
+                    reference: 'test-payment-' + Date.now(),
+                    customer: { email: 'customer@test.com' }
+                }, true);
+                document.getElementById('embedded-results').innerHTML = `✅ Payment processed: ${JSON.stringify(result, null, 2)}`;
+                document.getElementById('embedded-results').className = 'result success';
+            } catch (error) {
+                document.getElementById('embedded-results').innerHTML = `❌ Error: ${error.message}`;
+                document.getElementById('embedded-results').className = 'result error';
+            }
+        }
+
+        async function testEmbeddedWallet() {
+            if (!currentApiKey) {
+                alert('Please register a partner first');
+                return;
+            }
+            try {
+                const result = await apiCall('/advanced/embedded/wallet', 'POST', {
+                    externalUserId: 'ext-user-' + Date.now(),
+                    email: 'user@test.com',
+                    currency: 'NGN'
+                }, true);
+                document.getElementById('embedded-results').innerHTML = `✅ Wallet created: ${JSON.stringify(result, null, 2)}`;
+                document.getElementById('embedded-results').className = 'result success';
+            } catch (error) {
+                document.getElementById('embedded-results').innerHTML = `❌ Error: ${error.message}`;
+                document.getElementById('embedded-results').className = 'result error';
+            }
+        }
+
+        // Blockchain Functions
+        async function createToken() {
+            try {
+                const tokenName = document.getElementById('token-name').value;
+                const tokenSymbol = document.getElementById('token-symbol').value;
+                const result = await apiCall('/advanced/blockchain/create-token', 'POST', {
+                    name: tokenName,
+                    symbol: tokenSymbol,
+                    baseYield: 0.08,
+                    totalSupply: 1000000,
+                    description: 'Test dynamic yield token'
+                });
+                currentTokenId = result.data.id;
+                document.getElementById('blockchain-results').innerHTML = `✅ Token created: ${JSON.stringify(result, null, 2)}`;
+                document.getElementById('blockchain-results').className = 'result success';
+            } catch (error) {
+                document.getElementById('blockchain-results').innerHTML = `❌ Error: ${error.message}`;
+                document.getElementById('blockchain-results').className = 'result error';
+            }
+        }
+
+        async function investInToken() {
+            if (!currentTokenId) {
+                alert('Please create a token first');
+                return;
+            }
+            try {
+                const result = await apiCall(`/advanced/blockchain/invest/${currentTokenId}`, 'POST', {
+                    amount: 50000
+                });
+                document.getElementById('blockchain-results').innerHTML = `✅ Investment made: ${JSON.stringify(result, null, 2)}`;
+                document.getElementById('blockchain-results').className = 'result success';
+            } catch (error) {
+                document.getElementById('blockchain-results').innerHTML = `❌ Error: ${error.message}`;
+                document.getElementById('blockchain-results').className = 'result error';
+            }
+        }
+
+        async function getPortfolio() {
+            try {
+                const result = await apiCall('/advanced/blockchain/portfolio');
+                document.getElementById('blockchain-results').innerHTML = `✅ Portfolio: ${JSON.stringify(result, null, 2)}`;
+                document.getElementById('blockchain-results').className = 'result success';
+            } catch (error) {
+                document.getElementById('blockchain-results').innerHTML = `❌ Error: ${error.message}`;
+                document.getElementById('blockchain-results').className = 'result error';
+            }
+        }
+
+        // Predictive Insights Functions
+        async function analyzeBehavior() {
+            try {
+                const result = await apiCall('/advanced/insights/behavior-analysis');
+                document.getElementById('insights-results').innerHTML = `✅ Behavior analyzed: ${JSON.stringify(result, null, 2)}`;
+                document.getElementById('insights-results').className = 'result success';
+            } catch (error) {
+                document.getElementById('insights-results').innerHTML = `❌ Error: ${error.message}`;
+                document.getElementById('insights-results').className = 'result error';
+            }
+        }
+
+        async function getPredictions() {
+            try {
+                const result = await apiCall('/advanced/insights/predictions');
+                document.getElementById('insights-results').innerHTML = `✅ Predictions: ${JSON.stringify(result, null, 2)}`;
+                document.getElementById('insights-results').className = 'result success';
+            } catch (error) {
+                document.getElementById('insights-results').innerHTML = `❌ Error: ${error.message}`;
+                document.getElementById('insights-results').className = 'result error';
+            }
+        }
+
+        async function getRealtimeInsights() {
+            try {
+                const result = await apiCall('/advanced/insights/realtime');
+                document.getElementById('insights-results').innerHTML = `✅ Realtime insights: ${JSON.stringify(result, null, 2)}`;
+                document.getElementById('insights-results').className = 'result success';
+            } catch (error) {
+                document.getElementById('insights-results').innerHTML = `❌ Error: ${error.message}`;
+                document.getElementById('insights-results').className = 'result error';
+            }
+        }
+
+        // Voice & Biometric Functions
+        async function enrollVoice() {
+            try {
+                const result = await apiCall('/advanced/voice/enroll', 'POST', {
+                    audioData: 'mock-audio-data'
+                });
+                document.getElementById('voice-results').innerHTML = `✅ Voice enrolled: ${JSON.stringify(result, null, 2)}`;
+                document.getElementById('voice-results').className = 'result success';
+            } catch (error) {
+                document.getElementById('voice-results').innerHTML = `❌ Error: ${error.message}`;
+                document.getElementById('voice-results').className = 'result error';
+            }
+        }
+
+        async function authenticateVoice() {
+            try {
+                const result = await apiCall('/advanced/voice/authenticate', 'POST', {
+                    audioData: 'mock-audio-data',
+                    passphrase: 'my voice is my password'
+                });
+                document.getElementById('voice-results').innerHTML = `✅ Voice auth: ${JSON.stringify(result, null, 2)}`;
+                document.getElementById('voice-results').className = 'result success';
+            } catch (error) {
+                document.getElementById('voice-results').innerHTML = `❌ Error: ${error.message}`;
+                document.getElementById('voice-results').className = 'result error';
+            }
+        }
+
+        async function enrollBiometric() {
+            try {
+                const result = await apiCall('/advanced/biometric/enroll', 'POST', {
+                    biometricData: 'mock-fingerprint-data',
+                    type: 'fingerprint'
+                });
+                document.getElementById('voice-results').innerHTML = `✅ Biometric enrolled: ${JSON.stringify(result, null, 2)}`;
+                document.getElementById('voice-results').className = 'result success';
+            } catch (error) {
+                document.getElementById('voice-results').innerHTML = `❌ Error: ${error.message}`;
+                document.getElementById('voice-results').className = 'result error';
+            }
+        }
+
+        async function startVoiceSession() {
+            try {
+                const result = await apiCall('/advanced/voice/start-session', 'POST');
+                document.getElementById('voice-results').innerHTML = `✅ Voice session: ${JSON.stringify(result, null, 2)}`;
+                document.getElementById('voice-results').className = 'result success';
+            } catch (error) {
+                document.getElementById('voice-results').innerHTML = `❌ Error: ${error.message}`;
+                document.getElementById('voice-results').className = 'result error';
+            }
+        }
+
+        // Gamification Functions
+        async function getChallenges() {
+            try {
+                const result = await apiCall('/advanced/gamification/challenges');
+                document.getElementById('game-results').innerHTML = `✅ Challenges: ${JSON.stringify(result, null, 2)}`;
+                document.getElementById('game-results').className = 'result success';
+            } catch (error) {
+                document.getElementById('game-results').innerHTML = `❌ Error: ${error.message}`;
+                document.getElementById('game-results').className = 'result error';
+            }
+        }
+
+        async function getLeaderboard() {
+            try {
+                const result = await apiCall('/advanced/gamification/leaderboard');
+                document.getElementById('game-results').innerHTML = `✅ Leaderboard: ${JSON.stringify(result, null, 2)}`;
+                document.getElementById('game-results').className = 'result success';
+            } catch (error) {
+                document.getElementById('game-results').innerHTML = `❌ Error: ${error.message}`;
+                document.getElementById('game-results').className = 'result error';
+            }
+        }
+
+        // Initialize
+        checkServer();
+        setInterval(checkServer, 30000); // Check every 30 seconds
+    </script>
+</body>
+</html>
