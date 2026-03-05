@@ -7,10 +7,17 @@ const walletSchema = new mongoose.Schema({
   balance: { type: Number, default: 0 }, // Main balance in cents
   currency: { type: String, enum: ['USD', 'NGN'], default: 'NGN' },
   
-  // Dual wallet support - USD and NGN
+  // Wallets with multi-currency and purpose support
   wallets: [
     {
+      _id: { type: mongoose.Schema.Types.ObjectId, auto: true },
       currency: { type: String, enum: ['USD', 'NGN'], required: true },
+      purpose: { 
+        type: String, 
+        enum: ['general', 'savings', 'bills', 'spending', 'investment', 'emergency'], 
+        default: 'general' 
+      }, // Purpose of the wallet
+      name: String, // Custom name for the wallet (e.g., "Monthly Savings")
       balance: { type: Number, default: 0 }, // Balance in cents (1 dollar/naira = 100 cents)
       dailyLimit: { type: Number, default: 10000 * 100 }, // $10k/₦10k in cents
       monthlyLimit: { type: Number, default: 100000 * 100 }, // $100k/₦100k
@@ -18,6 +25,8 @@ const walletSchema = new mongoose.Schema({
       monthlySpent: { type: Number, default: 0 }, // Spent this month
       lastResetDaily: { type: Date, default: Date.now }, // Last reset of daily limit
       lastResetMonthly: { type: Date, default: Date.now }, // Last reset of monthly limit
+      isActive: { type: Boolean, default: true }, // Whether this wallet is active
+      createdAt: { type: Date, default: Date.now },
     }
   ],
   
@@ -44,12 +53,19 @@ walletSchema.methods.getWallet = function(currency) {
   return this.wallets.find(w => w.currency === currency);
 };
 
-// Method to get or create wallet for currency
-walletSchema.methods.getOrCreateWallet = function(currency) {
-  let wallet = this.wallets.find(w => w.currency === currency);
+// Method to get wallet by currency and purpose
+walletSchema.methods.getWalletByPurpose = function(currency, purpose = 'general') {
+  return this.wallets.find(w => w.currency === currency && w.purpose === purpose && w.isActive);
+};
+
+// Method to get or create wallet for currency with optional purpose
+walletSchema.methods.getOrCreateWallet = function(currency, purpose = 'general', name = null) {
+  let wallet = this.wallets.find(w => w.currency === currency && w.purpose === purpose && w.isActive);
   if (!wallet) {
     wallet = {
       currency,
+      purpose,
+      name: name || `${purpose.charAt(0).toUpperCase() + purpose.slice(1)} ${currency}`,
       balance: 0,
       dailyLimit: 10000 * 100,
       monthlyLimit: 100000 * 100,
@@ -57,10 +73,22 @@ walletSchema.methods.getOrCreateWallet = function(currency) {
       monthlySpent: 0,
       lastResetDaily: new Date(),
       lastResetMonthly: new Date(),
+      isActive: true,
+      createdAt: new Date(),
     };
     this.wallets.push(wallet);
   }
   return wallet;
+};
+
+// Method to get all wallets for a currency
+walletSchema.methods.getWalletsByCurrency = function(currency) {
+  return this.wallets.filter(w => w.currency === currency && w.isActive);
+};
+
+// Method to get all wallets for a purpose
+walletSchema.methods.getWalletsByPurpose = function(purpose) {
+  return this.wallets.filter(w => w.purpose === purpose && w.isActive);
 };
 
 // Method to add funds to a wallet

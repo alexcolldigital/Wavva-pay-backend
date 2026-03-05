@@ -1,7 +1,11 @@
 const User = require('../models/User');
 const Transaction = require('../models/Transaction');
 const Wallet = require('../models/Wallet');
+const Merchant = require('../models/Merchant');
+const MerchantKYC = require('../models/MerchantKYC');
+const CommissionLedger = require('../models/CommissionLedger');
 const logger = require('../utils/logger');
+const { getLedgerBalance, getCommissionStats, getLedgerEntries } = require('../services/commissionService');
 
 // Get platform statistics
 const getStats = async (req, res) => {
@@ -353,6 +357,461 @@ const getFraudAlerts = async (req, res) => {
   }
 };
 
+// ===== KYC MANAGEMENT FUNCTIONS =====
+
+// Get All Pending KYC Submissions
+const getPendingKYC = async (req, res) => {
+  try {
+    const { page = 1, limit = 20 } = req.query;
+    const skip = (page - 1) * limit;
+
+    const pendingKYCs = await MerchantKYC.find({ status: 'pending' })
+      .populate('merchantId', 'businessName businessType phone email kycVerified')
+      .sort({ createdAt: -1 })
+      .skip(skip)
+      .limit(parseInt(limit));
+
+    const total = await MerchantKYC.countDocuments({ status: 'pending' });
+
+    res.json({
+      success: true,
+      pendingKYCs: pendingKYCs.map(kyc => ({
+        _id: kyc._id,
+        merchantId: kyc.merchantId._id,
+        businessName: kyc.merchantId.businessName,
+        businessType: kyc.merchantId.businessType,
+        phone: kyc.merchantId.phone,
+        email: kyc.merchantId.email,
+        status: kyc.status,
+        kycLevel: kyc.kycLevel,
+        businessRegVerified: kyc.businessRegistration?.verified || false,
+        directorsCount: kyc.directors?.length || 0,
+        bankAccountVerified: kyc.bankAccount?.verified || false,
+        submittedAt: kyc.createdAt,
+        submissions: kyc.submissions?.length || 0
+      })),
+      pagination: {
+        page: parseInt(page),
+        limit: parseInt(limit),
+        total,
+        pages: Math.ceil(total / limit)
+      }
+    });
+  } catch (err) {
+    logger.error('Get pending KYC error', err.message);
+    res.status(500).json({ error: 'Failed to retrieve pending KYC submissions' });
+  }
+};
+
+// Get KYC Details (Admin View)
+const getKYCDetailsAdmin = async (req, res) => {
+  try {
+    const { kycId } = req.params;
+
+    const kyc = await MerchantKYC.findById(kycId)
+      .populate('merchantId', 'businessName businessType phone email');
+
+    if (!kyc) {
+      return res.status(404).json({ error: 'KYC record not found' });
+    }
+
+    res.json({
+      success: true,
+      kyc: {
+        _id: kyc._id,
+        merchant: kyc.merchantId,
+        businessRegistration: {
+          number: kyc.businessRegistration?.number || null,
+          document: kyc.businessRegistration?.document || null,
+          verified: kyc.businessRegistration?.verified || false,
+          verifiedDate: kyc.businessRegistration?.verifiedDate || null
+        },
+        directors: kyc.directors || [],
+        bankAccount: {
+          accountNumber: kyc.bankAccount?.accountNumber || null,
+          bankCode: kyc.bankAccount?.bankCode || null,
+          bankName: kyc.bankAccount?.bankName || null,
+          accountName: kyc.bankAccount?.accountName || null,
+          verificationDocument: kyc.bankAccount?.verificationDocument || null,
+          verified: kyc.bankAccount?.verified || false,
+          verifiedDate: kyc.bankAccount?.verifiedDate || null
+        },
+        status: kyc.status,
+        verified: kyc.verified,
+        kycLevel: kyc.kycLevel,
+        rejectionReason: kyc.rejectionReason || null,
+        submissions: kyc.submissions || [],
+        createdAt: kyc.createdAt
+      }
+    });
+  } catch (err) {
+    logger.error('Get KYC details admin error', err.message);
+    res.status(500).json({ error: 'Failed to retrieve KYC details' });
+  }
+};
+
+// Approve Merchant KYC
+const approveMerchantKYC = async (req, res) => {
+  try {
+    const { kycId } = req.params;
+    const { comment = '' } = req.body;
+
+    const kyc = await MerchantKYC.findById(kycId);
+    if (!kyc) {
+      return res.status(404).json({ error: 'KYC record not found' });
+    }
+
+    // Update KYC status
+    kyc.status = 'approved';
+    kyc.verified = true;
+    kyc.verifiedDate = new Date();
+    
+    kyc.submissions = kyc.submissions || [];
+    kyc.submissions.push({
+      submittedAt: new Date(),
+      status: 'approved',
+      comment: comment || 'KYC approved by admin'
+    });
+
+    await kyc.save();
+
+    // Update merchant KYC verification
+    const merchant = await Merchant.findByIdAndUpdate(
+      kyc.merchantId,
+      { 
+        kycVerified: true,
+        kycVerifiedDate: new Date()
+      },
+      { new: true }
+    );
+
+    res.json({
+      success: true,
+      message: 'Merchant KYC approved successfully',
+      kyc: {
+        _id: kyc._id,
+        status: kyc.status,
+        verified: kyc.verified,
+        verifiedDate: kyc.verifiedDate
+      },
+      merchant: {
+        _id: merchant._id,
+        businessName: merchant.businessName,
+        kycVerified: merchant.kycVerified
+      }
+    });
+  } catch (err) {
+    logger.error('Approve KYC error', err.message);
+    res.status(500).json({ error: 'Failed to approve KYC' });
+  }
+};
+
+// Reject Merchant KYC
+const rejectMerchantKYC = async (req, res) => {
+  try {
+    const { kycId } = req.params;
+    const { rejectionReason = 'KYC requirements not met' } = req.body;
+
+    if (!rejectionReason) {
+      return res.status(400).json({ error: 'Rejection reason is required' });
+    }
+
+    const kyc = await MerchantKYC.findById(kycId);
+    if (!kyc) {
+      return res.status(404).json({ error: 'KYC record not found' });
+    }
+
+    // Update KYC status
+    kyc.status = 'rejected';
+    kyc.rejectionReason = rejectionReason;
+    kyc.rejectionDate = new Date();
+    
+    kyc.submissions = kyc.submissions || [];
+    kyc.submissions.push({
+      submittedAt: new Date(),
+      status: 'rejected',
+      comment: rejectionReason
+    });
+
+    await kyc.save();
+
+    // Update merchant
+    const merchant = await Merchant.findByIdAndUpdate(
+      kyc.merchantId,
+      { kycVerified: false },
+      { new: true }
+    );
+
+    res.json({
+      success: true,
+      message: 'Merchant KYC rejected',
+      kyc: {
+        _id: kyc._id,
+        status: kyc.status,
+        rejectionReason: kyc.rejectionReason,
+        rejectionDate: kyc.rejectionDate
+      },
+      merchant: {
+        _id: merchant._id,
+        businessName: merchant.businessName,
+        kycVerified: merchant.kycVerified
+      }
+    });
+  } catch (err) {
+    logger.error('Reject KYC error', err.message);
+    res.status(500).json({ error: 'Failed to reject KYC' });
+  }
+};
+
+// Verify Specific KYC Document
+const verifyKYCDocument = async (req, res) => {
+  try {
+    const { kycId } = req.params;
+    const { documentType, verified = true } = req.body;
+
+    if (!['businessRegistration', 'bankAccount'].includes(documentType) && !documentType.startsWith('director_')) {
+      return res.status(400).json({ error: 'Invalid document type' });
+    }
+
+    const kyc = await MerchantKYC.findById(kycId);
+    if (!kyc) {
+      return res.status(404).json({ error: 'KYC record not found' });
+    }
+
+    // Verify document
+    if (documentType === 'businessRegistration') {
+      kyc.businessRegistration.verified = verified;
+      kyc.businessRegistration.verifiedDate = new Date();
+    } else if (documentType === 'bankAccount') {
+      kyc.bankAccount.verified = verified;
+      kyc.bankAccount.verifiedDate = new Date();
+    } else if (documentType.startsWith('director_')) {
+      const directorId = documentType.split('_')[1];
+      const director = kyc.directors.id(directorId);
+      if (director) {
+        director.verified = verified;
+        director.verifiedDate = new Date();
+      }
+    }
+
+    await kyc.save();
+
+    res.json({
+      success: true,
+      message: `Document ${verified ? 'verified' : 'unverified'} successfully`
+    });
+  } catch (err) {
+    logger.error('Verify KYC document error', err.message);
+    res.status(500).json({ error: 'Failed to verify document' });
+  }
+};
+
+// ============================================
+// Internal Ledger Management Routes
+// ============================================
+
+/**
+ * Get internal ledger balance
+ * GET /api/admin/ledger/balance
+ */
+const getLedgerBalance_endpoint = async (req, res) => {
+  try {
+    const { currency = 'NGN' } = req.query;
+    
+    // Validate currency
+    if (!['NGN', 'USD'].includes(currency)) {
+      return res.status(400).json({ error: 'Invalid currency' });
+    }
+    
+    const balance = await getLedgerBalance(currency);
+    
+    res.json({
+      success: true,
+      ledger: balance
+    });
+  } catch (err) {
+    logger.error('Get ledger balance error', err.message);
+    res.status(500).json({ error: 'Failed to get ledger balance' });
+  }
+};
+
+/**
+ * Get commission statistics
+ * GET /api/admin/ledger/stats
+ */
+const getCommissionStats_endpoint = async (req, res) => {
+  try {
+    const { startDate, endDate, source, currency } = req.query;
+    
+    const filters = {};
+    if (source) filters.source = source;
+    if (currency) filters.currency = currency;
+    
+    const stats = await getCommissionStats({
+      startDate: startDate ? new Date(startDate) : new Date(Date.now() - 30 * 24 * 60 * 60 * 1000),
+      endDate: endDate ? new Date(endDate) : new Date(),
+      source,
+      currency
+    });
+    
+    res.json({
+      success: true,
+      stats
+    });
+  } catch (err) {
+    logger.error('Get commission stats error', err.message);
+    res.status(500).json({ error: 'Failed to get commission statistics' });
+  }
+};
+
+/**
+ * Get commission ledger entries
+ * GET /api/admin/ledger/entries
+ */
+const getLedgerEntries_endpoint = async (req, res) => {
+  try {
+    const { page = 1, limit = 20, source, currency } = req.query;
+    
+    const filters = {};
+    if (source) filters.source = source;
+    if (currency) filters.currency = currency;
+    
+    const result = await getLedgerEntries(parseInt(page), parseInt(limit), filters);
+    
+    res.json({
+      success: true,
+      ...result
+    });
+  } catch (err) {
+    logger.error('Get ledger entries error', err.message);
+    res.status(500).json({ error: 'Failed to get ledger entries' });
+  }
+};
+
+/**
+ * Get commission ledger summary for all currencies
+ * GET /api/admin/ledger/summary
+ */
+const getLedgerSummary = async (req, res) => {
+  try {
+    const balanceNGN = await getLedgerBalance('NGN');
+    const balanceUSD = await getLedgerBalance('USD');
+    
+    // Total collected this month
+    const startOfMonth = new Date();
+    startOfMonth.setDate(1);
+    startOfMonth.setHours(0, 0, 0, 0);
+    
+    const thisMonth = await CommissionLedger.aggregate([
+      {
+        $match: {
+          createdAt: { $gte: startOfMonth },
+          status: 'credited'
+        }
+      },
+      {
+        $group: {
+          _id: '$currency',
+          total: { $sum: '$amount' },
+          count: { $sum: 1 }
+        }
+      }
+    ]);
+    
+    // Total all time
+    const allTime = await CommissionLedger.aggregate([
+      {
+        $match: { status: 'credited' }
+      },
+      {
+        $group: {
+          _id: '$currency',
+          total: { $sum: '$amount' },
+          count: { $sum: 1 }
+        }
+      }
+    ]);
+    
+    res.json({
+      success: true,
+      summary: {
+        currentBalance: {
+          NGN: balanceNGN,
+          USD: balanceUSD
+        },
+        thisMonth: thisMonth.reduce((acc, item) => {
+          acc[item._id] = {
+            amount: item.total,
+            formatted: (item.total / 100).toFixed(2),
+            count: item.count
+          };
+          return acc;
+        }, {}),
+        allTime: allTime.reduce((acc, item) => {
+          acc[item._id] = {
+            amount: item.total,
+            formatted: (item.total / 100).toFixed(2),
+            count: item.count
+          };
+          return acc;
+        }, {})
+      }
+    });
+  } catch (err) {
+    logger.error('Get ledger summary error', err.message);
+    res.status(500).json({ error: 'Failed to get ledger summary' });
+  }
+};
+
+/**
+ * Get detailed commission breakdown report
+ * GET /api/admin/ledger/report
+ */
+const getCommissionReport = async (req, res) => {
+  try {
+    const { format = 'json' } = req.query;
+    
+    // Get all commission sources
+    const report = await CommissionLedger.aggregate([
+      { $match: { status: 'credited' } },
+      {
+        $group: {
+          _id: {
+            source: '$source',
+            currency: '$currency'
+          },
+          totalAmount: { $sum: '$amount' },
+          count: { $sum: 1 },
+          avgAmount: { $avg: '$amount' },
+          maxAmount: { $max: '$amount' },
+          minAmount: { $min: '$amount' }
+        }
+      },
+      { $sort: { totalAmount: -1 } }
+    ]);
+    
+    const formattedReport = report.map(item => ({
+      source: item._id.source,
+      currency: item._id.currency,
+      totalAmount: item.totalAmount,
+      totalFormatted: (item.totalAmount / 100).toFixed(2),
+      count: item.count,
+      avgAmount: (item.avgAmount / 100).toFixed(2),
+      maxAmount: (item.maxAmount / 100).toFixed(2),
+      minAmount: (item.minAmount / 100).toFixed(2)
+    }));
+    
+    res.json({
+      success: true,
+      report: formattedReport,
+      generatedAt: new Date()
+    });
+  } catch (err) {
+    logger.error('Get commission report error', err.message);
+    res.status(500).json({ error: 'Failed to generate commission report' });
+  }
+};
+
 module.exports = {
   getStats,
   getUsers,
@@ -362,4 +821,14 @@ module.exports = {
   unsuspendUser,
   refundTransaction,
   getFraudAlerts,
+  getPendingKYC,
+  getKYCDetailsAdmin,
+  approveMerchantKYC,
+  rejectMerchantKYC,
+  verifyKYCDocument,
+  getLedgerBalance: getLedgerBalance_endpoint,
+  getCommissionStats: getCommissionStats_endpoint,
+  getLedgerEntries: getLedgerEntries_endpoint,
+  getLedgerSummary,
+  getCommissionReport,
 };

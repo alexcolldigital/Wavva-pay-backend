@@ -77,8 +77,19 @@ app.use('/api/users', require('./routes/users'));
 app.use('/api/wallets', require('./routes/wallets'));
 app.use('/api/transactions', require('./routes/transactions'));
 app.use('/api/combines', require('./routes/combines'));
+app.use('/api/payment-requests', require('./routes/paymentRequests'));
 app.use('/api/payments', require('./routes/payments'));
+app.use('/api/voice', require('./routes/voice'));
+app.use('/api/banking', require('./routes/banking'));
 app.use('/api/admin', require('./routes/admin'));
+
+// Merchant Routes
+app.use('/api/merchant', require('./routes/merchant'));
+app.use('/api/merchant/payment-links', require('./routes/paymentLink'));
+app.use('/api/merchant/dashboard', require('./routes/merchantDashboard'));
+app.use('/api/merchant/settlement', require('./routes/settlement'));
+app.use('/api/merchant/subscriptions', require('./routes/subscriptions'));
+app.use('/api/invoices', require('./routes/invoices'));
 
 // Health check endpoint
 app.get('/health', (req, res) => {
@@ -116,6 +127,20 @@ server.listen(PORT, () => {
   console.log(`✅ Server running on port ${PORT}`);
   console.log(`📡 WebSocket server ready`);
   logger.info(`Server started on port ${PORT}`);
+
+  // Initialize scheduled jobs
+  if (process.env.NODE_ENV !== 'test') {
+    try {
+      const { startSettlementCron, startRetryCheckCron } = require('./services/settlementCron');
+      const { startRecurringBillingCron } = require('./services/recurringBillingCron');
+      startSettlementCron();     // Daily settlement execution at 9 AM UTC
+      startRetryCheckCron();     // Retry failed settlements every 4 hours
+      startRecurringBillingCron(); // Recurring billing at 2 AM UTC
+      logger.info('✅ Scheduled cron jobs initialized');
+    } catch (error) {
+      logger.error('Failed to initialize cron jobs:', error.message);
+    }
+  }
 });
 
 // Graceful shutdown

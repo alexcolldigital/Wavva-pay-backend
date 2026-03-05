@@ -136,6 +136,69 @@ const cloudinaryService = {
   async updateImageTags(publicId, tags = []) {
     return cloudinary.uploader.add_tag(tags, publicId);
   },
+
+  /**
+   * Upload document (PDF, Word, etc) to Cloudinary
+   * @param {Buffer} fileBuffer - The file buffer from multer
+   * @param {string} merchantId - Merchant ID for organizing uploads
+   * @param {string} docType - Document type (business-registration, director-id, bank-statement, etc)
+   * @param {string} originalFilename - Original filename for reference
+   * @returns {Promise<Object>} Upload result with secure_url and public_id
+   */
+  async uploadDocument(fileBuffer, merchantId, docType, originalFilename = 'document') {
+    return new Promise((resolve, reject) => {
+      const uploadStream = cloudinary.uploader.upload_stream(
+        {
+          folder: `wavva-pay/kyc/${docType}`,
+          resource_type: 'auto',
+          public_id: `${merchantId}_${docType}_${Date.now()}`,
+          fetch_format: 'auto',
+          quality: 'auto',
+          tags: ['kyc-document', docType, merchantId.toString()],
+        },
+        (error, result) => {
+          if (error) {
+            reject(error);
+          } else {
+            resolve({
+              secure_url: result.secure_url,
+              public_id: result.public_id,
+              format: result.format,
+              bytes: result.bytes,
+              uploadedAt: new Date(),
+            });
+          }
+        }
+      );
+
+      // Stream the buffer to Cloudinary
+      streamifier.createReadStream(fileBuffer).pipe(uploadStream);
+    });
+  },
+
+  /**
+   * Delete file from Cloudinary
+   * @param {string} publicId - Cloudinary public ID of the file
+   * @returns {Promise<Object>} Deletion result
+   */
+  async deleteFile(publicId) {
+    if (!publicId) {
+      throw new Error('Public ID is required for deletion');
+    }
+
+    return cloudinary.uploader.destroy(publicId);
+  },
+
+  /**
+   * Delete multiple files from Cloudinary
+   * @param {Array<string>} publicIds - Array of Cloudinary public IDs
+   * @returns {Promise<Array>} Array of deletion results
+   */
+  async deleteMultipleFiles(publicIds) {
+    return Promise.all(
+      publicIds.map(publicId => this.deleteFile(publicId))
+    );
+  },
 };
 
 module.exports = cloudinaryService;

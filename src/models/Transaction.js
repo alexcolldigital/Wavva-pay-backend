@@ -33,6 +33,7 @@ const transactionSchema = new mongoose.Schema({
   // Details
   description: String,
   combineId: { type: mongoose.Schema.Types.ObjectId, ref: 'Combine' }, // if part of combine
+  paymentRequestId: { type: mongoose.Schema.Types.ObjectId, ref: 'PaymentRequest' }, // if part of payment request
   
   // Status
   status: { 

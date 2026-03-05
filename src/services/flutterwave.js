@@ -200,6 +200,25 @@ const resolveBankAccount = async (account_number, account_bank) => {
 
 // Get list of supported banks
 const getBankList = async (country = 'NG') => {
+  // Fallback to a default list of Nigerian banks
+  const fallbackBanks = [
+    { id: 1, code: '044', name: 'Access Bank' },
+    { id: 2, code: '050', name: 'Ecobank Nigeria' },
+    { id: 3, code: '011', name: 'First Bank of Nigeria' },
+    { id: 4, code: '058', name: 'Fidelity Bank' },
+    { id: 5, code: '070', name: 'Fidelity Bank (GTB)' },
+    { id: 6, code: '215', name: 'Guaranty Trust Bank (GTB)' },
+    { id: 7, code: '012', name: 'IBTC Chartered Bank' },
+    { id: 8, code: '082', name: 'Keystone Bank' },
+    { id: 9, code: '526', name: 'Neo Bank' },
+    { id: 10, code: '090', name: 'Mainstreet Bank' },
+    { id: 11, code: '100', name: 'SunTrust Bank' },
+    { id: 12, code: '033', name: 'United Bank for Africa (UBA)' },
+    { id: 13, code: '035', name: 'Wema Bank' },
+    { id: 14, code: '057', name: 'Zenith Bank' },
+    { id: 15, code: '060', name: 'FCMB Bank' },
+  ];
+
   try {
     // Flutterwave API endpoint for banks - use specific country code
     const response = await flutterwaveClient.get(`/banks/${country}`);
@@ -229,18 +248,20 @@ const getBankList = async (country = 'NG') => {
           })),
         };
       } catch (fallbackErr) {
-        logger.error('Flutterwave getBankList fallback error:', fallbackErr.response?.data || fallbackErr.message);
+        logger.warn('Flutterwave getBankList fallback error, using hardcoded list:', fallbackErr.response?.data || fallbackErr.message);
         return {
-          success: false,
-          error: fallbackErr.response?.data?.message || 'Failed to fetch bank list',
+          success: true,
+          banks: fallbackBanks,
+          usingFallback: true,
         };
       }
     }
     
-    logger.error('Flutterwave getBankList error:', err.response?.data || err.message);
+    logger.warn('Flutterwave getBankList error, using hardcoded list:', err.response?.data || err.message);
     return {
-      success: false,
-      error: err.response?.data?.message || 'Failed to fetch bank list',
+      success: true,
+      banks: fallbackBanks,
+      usingFallback: true,
     };
   }
 };

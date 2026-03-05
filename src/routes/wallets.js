@@ -4,6 +4,9 @@ const {
   getAnalytics,
   getWallets,
   getWalletByCurrency,
+  createPurposeWallet,
+  getWalletsByPurpose,
+  getAllWallets,
   addFunds,
   setLimits,
   checkLimits,
@@ -14,10 +17,19 @@ const router = express.Router();
 // NOTE: Order matters! Specific routes must come before parameter routes
 // This prevents /analytics being matched as /:currency='analytics'
 
+// Get all wallets (organized by purpose)
+router.get('/all', authMiddleware, getAllWallets);
+
 // Wallet analytics route (specific route before /:currency)
 router.get('/analytics', authMiddleware, getAnalytics);
 
-// Get wallets
+// Create a new wallet with purpose
+router.post('/create-purpose-wallet', authMiddleware, createPurposeWallet);
+
+// Get wallets by purpose
+router.get('/by-purpose/:purpose', authMiddleware, getWalletsByPurpose);
+
+// Get wallets (main endpoint)
 router.get('/', authMiddleware, getWallets);
 
 // Get specific wallet by currency

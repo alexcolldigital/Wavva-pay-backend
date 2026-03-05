@@ -1,18 +1,24 @@
 const User = require('../models/User');
 const Wallet = require('../models/Wallet');
 const Transaction = require('../models/Transaction');
-const { createTransfer, getTransferStatus: getPaystackTransferStatus, getBankList, createTransferRecipient, resolveBankAccount } = require('../services/paystack');
+const CommissionLedger = require('../models/CommissionLedger');
+const { createTransfer, getTransferStatus, getBankList, createTransferRecipient, resolveBankAccount, initializePayment: onepipeInitializePayment, verifyPayment: onepipeVerifyPayment, payBill, buyAirtime, buyDataBundle, getDataPlans, getBillProviders } = require('../services/onepipe');
 const { calculateFee } = require('../utils/feeCalculator');
+const { recordCommission } = require('../services/commissionService');
 
 // Send money P2P (internal transfer)
 const sendMoney = async (req, res) => {
   try {
-    const { receiverId, amount, currency = 'NGN', description, method = 'username' } = req.body;
+    const { receiverId, receiver, amount, currency = 'NGN', description, method = 'username' } = req.body;
     const senderId = req.userId;
     
     // Validation
-    if (!receiverId || !amount || amount <= 0) {
-      return res.status(400).json({ error: 'Invalid amount or receiver' });
+    if (!amount || amount <= 0) {
+      return res.status(400).json({ error: 'Invalid amount' });
+    }
+
+    if (!receiverId && !receiver) {
+      return res.status(400).json({ error: 'Either receiverId or receiver (username) is required' });
     }
 
     // Validate currency (only USD and NGN allowed)
@@ -31,17 +37,49 @@ const sendMoney = async (req, res) => {
       });
     }
     
-    // Get sender & receiver
+    // Get sender
     const sender = await User.findById(senderId);
-    const receiver = await User.findById(receiverId);
+    if (!sender) {
+      return res.status(400).json({ error: 'Sender user not found' });
+    }
+
+    // Get receiver - either by ID or by username/identifier
+    let receiverUser;
+    if (receiverId) {
+      receiverUser = await User.findById(receiverId);
+    } else if (receiver) {
+      // Look up by username first (exact match)
+      receiverUser = await User.findOne({ username: receiver });
+      
+      // If not found, try as MongoDB ObjectId
+      if (!receiverUser && receiver.length === 24) {
+        try {
+          receiverUser = await User.findById(receiver);
+        } catch (e) {
+          // Invalid ObjectId
+        }
+      }
+
+      // If still not found, try partial username match (case-insensitive)
+      if (!receiverUser) {
+        receiverUser = await User.findOne({
+          username: { $regex: receiver, $options: 'i' }
+        });
+      }
+    }
     
-    if (!sender || !receiver) {
+    if (!sender || !receiverUser) {
       return res.status(400).json({ error: 'User not found' });
     }
 
     // Prevent sending to self
-    if (senderId === receiverId) {
+    if (senderId === receiverUser._id.toString()) {
       return res.status(400).json({ error: 'Cannot send money to yourself' });
+    }
+
+    // Cannot send to suspended users
+    if (receiverUser.accountStatus === 'suspended') {
+      return res.status(400).json({ error: 'This account is suspended' });
     }
     
     // Calculate transaction fee (P2P transfer)
@@ -58,7 +96,7 @@ const sendMoney = async (req, res) => {
     // Create transaction record (internal P2P transfer)
     const transaction = new Transaction({
       sender: senderId,
-      receiver: receiverId,
+      receiver: receiverUser._id,
       amount: amountInCents, // Gross amount (what receiver gets)
       currency,
       feePercentage,
@@ -80,10 +118,25 @@ const sendMoney = async (req, res) => {
     senderWallet.balance -= totalDebit; // Deduct amount + fee from sender
     await senderWallet.save();
     
-    const receiverWallet = await Wallet.findById(receiver.walletId);
+    const receiverWallet = await Wallet.findById(receiverUser.walletId);
     if (receiverWallet) {
       receiverWallet.balance += amountInCents; // Receiver gets the full amount
       await receiverWallet.save();
+    }
+
+    // Record commission to internal ledger
+    if (feeAmount > 0) {
+      await recordCommission({
+        transactionId: transaction._id,
+        amount: feeAmount,
+        currency,
+        source: 'p2p_transfer',
+        fromUser: senderId,
+        toUser: receiverUser._id,
+        feePercentage,
+        grossAmount: amountInCents,
+        description: `P2P transfer commission: ${sender.username} → ${receiverUser.username}`
+      });
     }
 
     res.json({
@@ -100,11 +153,11 @@ const sendMoney = async (req, res) => {
           profilePicture: sender.profilePicture
         },
         receiver: {
-          _id: receiver._id,
-          firstName: receiver.firstName,
-          lastName: receiver.lastName,
-          username: receiver.username,
-          profilePicture: receiver.profilePicture
+          _id: receiverUser._id,
+          firstName: receiverUser.firstName,
+          lastName: receiverUser.lastName,
+          username: receiverUser.username,
+          profilePicture: receiverUser.profilePicture
         },
         amount: amount,
         currency,
@@ -243,29 +296,18 @@ const initializeFunding = async (req, res) => {
       return res.status(404).json({ error: 'User not found' });
     }
 
-    const { initializePayment } = require('../services/paystack');
+    // For OnePipe, we don't initialize remotely - card details come from frontend
+    // This endpoint now provides payment initialization instructions
+    const reference = `PAY-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
     
-    // Get request origin for multi-URL support
-    const requestOrigin = req.headers.origin || req.headers.referer?.split('/').slice(0, 3).join('/')
-    
-    const paymentResult = await initializePayment(
-      user.email,
-      amount,
-      currency,
-      { userId: userId.toString(), type: 'wallet_funding' },
-      requestOrigin
-    );
-
-    if (!paymentResult.success) {
-      return res.status(400).json({ error: paymentResult.error });
-    }
-
     res.json({
       success: true,
-      authorizationUrl: paymentResult.authorizationUrl,
-      accessCode: paymentResult.accessCode,
-      reference: paymentResult.reference,
+      message: 'Ready to accept card details. Send card details to /api/payments/fund/verify',
+      reference: reference,
       email: user.email,
+      amount: amount,
+      currency: currency,
+      instructions: 'Send card details (pan, cvv, expiry, pin) to process payment via OnePipe'
     });
   } catch (err) {
     console.error('Fund initialization error:', err);
@@ -273,13 +315,14 @@ const initializeFunding = async (req, res) => {
   }
 };
 
-// Verify Paystack payment and credit wallet
+// Verify/Process payment with OnePipe (accepts card details and verifies payment)
 const verifyFunding = async (req, res) => {
   try {
-    const { reference } = req.body;
+    const { reference, cardDetails } = req.body;
     const userId = req.userId;
+    const amount = req.body.amount || 0; // Amount that was being funded
 
-    console.log('🔍 Payment verification started:', { userId, reference });
+    console.log('🔍 OnePipe payment processing started:', { userId, reference });
 
     if (!reference) {
       return res.status(400).json({ error: 'Payment reference required' });
@@ -296,15 +339,47 @@ const verifyFunding = async (req, res) => {
       return res.status(404).json({ error: 'User wallet not found' });
     }
 
-    const { verifyPayment } = require('../services/paystack');
-    const verificationResult = await verifyPayment(reference);
+    let verificationResult;
 
-    console.log('✓ Paystack verification result:', verificationResult);
+    // If card details provided, charge directly via OnePipe
+    if (cardDetails && cardDetails.pan && cardDetails.cvv && cardDetails.expiry && cardDetails.pin) {
+      console.log('💳 Processing card charge via OnePipe...');
+      const amountInKobo = Math.round(amount * 100);
+      
+      const chargeResult = await onepipeInitializePayment(
+        {
+          pan: cardDetails.pan,
+          cvv: cardDetails.cvv,
+          expiry: cardDetails.expiry, // Format: MMyy
+          pin: cardDetails.pin
+        },
+        amountInKobo,
+        user.email,
+        { phone_no: user.phone, currency: 'NGN' }
+      );
+
+      if (!chargeResult.success) {
+        return res.status(400).json({ 
+          error: 'Card charge failed',
+          message: chargeResult.error,
+          status: chargeResult.status 
+        });
+      }
+
+      verificationResult = chargeResult;
+    } else {
+      // Otherwise, verify existing reference
+      console.log('🔍 Verifying existing payment reference...');
+      verificationResult = await onepipeVerifyPayment(reference);
+    }
+
+    console.log('✓ OnePipe result:', verificationResult);
 
     if (!verificationResult.success) {
-      console.error('❌ Verification failed:', verificationResult);
+      console.error('❌ Payment processing failed:', verificationResult);
       return res.status(400).json({ 
-        error: 'Payment verification failed',
+        error: 'Payment processing failed',
+        message: verificationResult.error,
         status: verificationResult.status 
       });
     }
@@ -317,16 +392,16 @@ const verifyFunding = async (req, res) => {
       sender: userId,
       receiver: null, // Self-funding
       amount: amountInCents, // Store in cents
-      currency: verificationResult.currency,
+      currency: verificationResult.currency || 'NGN',
       feePercentage,
       feeAmount,
       netAmount,
       type: 'wallet_funding',
       status: 'completed',
-      method: 'paystack',
+      method: 'onepipe',
       paystackReference: verificationResult.reference,
       paystackTransactionId: verificationResult.transactionId,
-      description: `Wallet funding via ${verificationResult.paymentMethod}`,
+      description: `Wallet funding via OnePipe (${verificationResult.paymentMethod || 'card'})`,
     });
 
     await transaction.save();
@@ -359,6 +434,20 @@ const verifyFunding = async (req, res) => {
     
     await wallet.save();
 
+    // Record commission to internal ledger
+    if (feeAmount > 0) {
+      await recordCommission({
+        transactionId: transaction._id,
+        amount: feeAmount,
+        currency: 'NGN',
+        source: 'wallet_funding',
+        fromUser: userId,
+        feePercentage,
+        grossAmount: amountInCents,
+        description: `Wallet funding commission via OnePipe (${verificationResult.paymentMethod || 'card'})`
+      });
+    }
+
     console.log(`✅ Wallet updated: ${userId} | Currency: NGN | Previous: ${previousBalance} | Gross: ${amountInCents} | Fee: ${feeAmount} | Net: ${creditAmount} | New: ${currencyWallet.balance}`);
 
     res.json({
@@ -389,12 +478,17 @@ const getBanks = async (req, res) => {
     const banksResult = await getBankList();
 
     if (!banksResult.success) {
+      console.warn('Bank list failed, but got fallback:', banksResult.banks?.length);
       return res.status(400).json({ error: banksResult.error });
     }
 
+    console.log(`Returning ${banksResult.banks?.length || 0} banks from ${banksResult.source || 'unknown'} source`);
+    
     res.json({
       success: true,
       banks: banksResult.banks,
+      source: banksResult.source,
+      count: banksResult.banks?.length || 0,
     });
   } catch (err) {
     console.error('Bank list fetch error:', err);
@@ -405,15 +499,15 @@ const getBanks = async (req, res) => {
 // Resolve bank account details
 const resolveAccount = async (req, res) => {
   try {
-    const { account_number, bank_code } = req.body;
+    const { account_number, account_bank } = req.body;
 
     // Validation
-    if (!account_number || !bank_code) {
+    if (!account_number || !account_bank) {
       return res.status(400).json({ error: 'Account number and bank code required' });
     }
 
     const { resolveBankAccount } = require('../services/paystack');
-    const resolveResult = await resolveBankAccount(account_number, bank_code);
+    const resolveResult = await resolveBankAccount(account_number, account_bank);
 
     if (!resolveResult.success) {
       return res.status(400).json({ error: resolveResult.error });
@@ -433,11 +527,11 @@ const resolveAccount = async (req, res) => {
 // Initiate bank transfer
 const initiateTransfer = async (req, res) => {
   try {
-    const { account_number, bank_code, amount, currency = 'NGN', description } = req.body;
+    const { account_number, account_bank, amount, currency = 'NGN', description } = req.body;
     const userId = req.userId;
 
     // Validation
-    if (!account_number || !bank_code || !amount || amount <= 0) {
+    if (!account_number || !account_bank || !amount || amount <= 0) {
       return res.status(400).json({ error: 'Invalid account details or amount' });
     }
 
@@ -470,7 +564,7 @@ const initiateTransfer = async (req, res) => {
 
     // First, resolve the bank account to verify it exists
     const { resolveBankAccount, createTransferRecipient } = require('../services/paystack');
-    const resolveResult = await resolveBankAccount(account_number, bank_code);
+    const resolveResult = await resolveBankAccount(account_number, account_bank);
     
     if (!resolveResult.success) {
       return res.status(400).json({ error: 'Invalid bank account: ' + resolveResult.error });
@@ -479,7 +573,7 @@ const initiateTransfer = async (req, res) => {
     // Create transfer recipient
     const recipientResult = await createTransferRecipient(
       account_number,
-      bank_code,
+      account_bank,
       resolveResult.accountName,
       'nuban'
     );
@@ -517,7 +611,7 @@ const initiateTransfer = async (req, res) => {
       description: description || `Bank transfer to ${account_number}`,
       metadata: {
         accountNumber: account_number,
-        bankCode: bank_code,
+        bankCode: account_bank,
         accountName: resolveResult.accountName,
       },
     });
@@ -528,6 +622,20 @@ const initiateTransfer = async (req, res) => {
     const wallet = await Wallet.findById(user.walletId);
     wallet.balance -= totalDebit;
     await wallet.save();
+
+    // Record commission to internal ledger
+    if (feeAmount > 0) {
+      await recordCommission({
+        transactionId: transaction._id,
+        amount: feeAmount,
+        currency,
+        source: 'bank_transfer',
+        fromUser: userId,
+        feePercentage,
+        grossAmount: amountInCents,
+        description: `Bank transfer commission to ${resolveResult.accountName}`
+      });
+    }
 
     res.json({
       success: true,
@@ -554,7 +662,7 @@ const initiateTransfer = async (req, res) => {
 };
 
 // Get bank transfer status
-const getTransferStatus = async (req, res) => {
+const getTransferStatusEndpoint = async (req, res) => {
   try {
     const { transferId } = req.params;
     const userId = req.userId;
@@ -569,9 +677,8 @@ const getTransferStatus = async (req, res) => {
       return res.status(404).json({ error: 'Transfer not found' });
     }
 
-    // Get status from Paystack
-    const { getTransferStatus: getStatus } = require('../services/paystack');
-    const statusResult = await getStatus(transferId);
+    // Get status from OnePipe
+    const statusResult = await getTransferStatus(transferId);
 
     if (!statusResult.success) {
       return res.status(400).json({ error: statusResult.error });
@@ -796,8 +903,599 @@ const requestPayment = async (req, res) => {
   }
 };
 
+// Transfer funds between wallets (same user, different purposes/currencies)
+const transferBetweenWallets = async (req, res) => {
+  try {
+    const { fromWalletPurpose = 'general', toWalletPurpose = 'general', amount, currency = 'NGN', description } = req.body;
+    const userId = req.userId;
+    
+    // Validation
+    if (!amount || amount <= 0) {
+      return res.status(400).json({ error: 'Invalid amount' });
+    }
+
+    // Validate currency
+    const validCurrencies = ['USD', 'NGN'];
+    if (!validCurrencies.includes(currency)) {
+      return res.status(400).json({ 
+        error: 'Invalid currency. Only USD and NGN are supported.' 
+      });
+    }
+
+    // Cannot transfer to same wallet
+    if (fromWalletPurpose === toWalletPurpose && currency === currency) {
+      return res.status(400).json({ error: 'Cannot transfer to the same wallet' });
+    }
+    
+    // Get user and wallets
+    const user = await User.findById(userId).populate('walletId');
+    if (!user || !user.walletId) {
+      return res.status(400).json({ error: 'User or wallet not found' });
+    }
+
+    const wallet = user.walletId;
+    const fromWallet = wallet.getWalletByPurpose(currency, fromWalletPurpose);
+    
+    if (!fromWallet) {
+      return res.status(400).json({ error: `${fromWalletPurpose} ${currency} wallet not found` });
+    }
+
+    // Check balance
+    const amountInCents = Math.round(amount * 100);
+    if (fromWallet.balance < amountInCents) {
+      return res.status(400).json({ error: 'Insufficient balance in source wallet' });
+    }
+
+    // Get or create destination wallet
+    const toWallet = wallet.getOrCreateWallet(currency, toWalletPurpose);
+
+    // Transfer funds
+    fromWallet.balance -= amountInCents;
+    toWallet.balance += amountInCents;
+
+    // Mark wallets as modified
+    wallet.markModified('wallets');
+    await wallet.save();
+
+    res.json({
+      success: true,
+      message: 'Funds transferred successfully',
+      transfer: {
+        from: {
+          purpose: fromWalletPurpose,
+          currency,
+          balance: (fromWallet.balance / 100).toFixed(2)
+        },
+        to: {
+          purpose: toWalletPurpose,
+          currency,
+          balance: (toWallet.balance / 100).toFixed(2)
+        },
+        amount: (amountInCents / 100).toFixed(2),
+        description: description || 'Internal wallet transfer',
+        timestamp: new Date()
+      }
+    });
+  } catch (err) {
+    console.error('Wallet transfer error:', err);
+    res.status(500).json({ error: 'Failed to transfer funds between wallets' });
+  }
+};
+
+// Send money via NFC Tag
+const sendMoneyViaNFC = async (req, res) => {
+  try {
+    const { nfcTag, amount, currency = 'NGN', description } = req.body;
+    const senderId = req.userId;
+    
+    // Validation
+    if (!nfcTag || !amount || amount <= 0) {
+      return res.status(400).json({ error: 'Invalid NFC tag or amount' });
+    }
+
+    // Validate currency (only USD and NGN allowed)
+    const validCurrencies = ['USD', 'NGN'];
+    if (!validCurrencies.includes(currency)) {
+      return res.status(400).json({ 
+        error: 'Invalid currency. Only USD and NGN are supported.' 
+      });
+    }
+    
+    // Find receiver by NFC tag
+    const receiver = await User.findOne({ nfcTag });
+    
+    if (!receiver) {
+      return res.status(400).json({ error: 'No user found with this NFC tag' });
+    }
+
+    // Prevent sending to self
+    if (senderId === receiver._id.toString()) {
+      return res.status(400).json({ error: 'Cannot send money to yourself' });
+    }
+    
+    // Get sender & check balance
+    const sender = await User.findById(senderId);
+    if (!sender) {
+      return res.status(400).json({ error: 'User not found' });
+    }
+    
+    // Calculate transaction fee (NFC transfer is same as P2P)
+    const amountInCents = Math.round(amount * 100);
+    const { feeAmount, netAmount, feePercentage } = calculateFee(amountInCents, currency, 'p2p_transfer');
+    const totalDebit = amountInCents + feeAmount; // Sender pays: amount + fee
+    
+    // Check sender's balance (must cover amount + fee)
+    const senderWallet = await Wallet.findById(sender.walletId);
+    if (!senderWallet || senderWallet.balance < totalDebit) {
+      return res.status(400).json({ error: 'Insufficient balance to cover amount and fee' });
+    }
+    
+    // Create transaction record (NFC transfer)
+    const transaction = new Transaction({
+      sender: senderId,
+      receiver: receiver._id,
+      amount: amountInCents, // Gross amount (what receiver gets)
+      currency,
+      feePercentage,
+      feeAmount,
+      netAmount,
+      type: 'peer-to-peer',
+      description: description || 'NFC Transfer',
+      status: 'completed',
+      method: 'nfc',
+      metadata: {
+        nfcTag: nfcTag
+      }
+    });
+    
+    await transaction.save();
+    
+    // Populate sender and receiver details
+    await transaction.populate('sender', 'firstName lastName username profilePicture');
+    await transaction.populate('receiver', 'firstName lastName username profilePicture');
+    
+    // Update balances
+    senderWallet.balance -= totalDebit; // Deduct amount + fee from sender
+    await senderWallet.save();
+    
+    const receiverWallet = await Wallet.findById(receiver.walletId);
+    if (receiverWallet) {
+      receiverWallet.balance += amountInCents; // Receiver gets the full amount
+      await receiverWallet.save();
+    }
+
+    // Record commission to internal ledger
+    if (feeAmount > 0) {
+      await recordCommission({
+        transactionId: transaction._id,
+        amount: feeAmount,
+        currency,
+        source: 'nfc_transfer',
+        fromUser: senderId,
+        toUser: receiver._id,
+        feePercentage,
+        grossAmount: amountInCents,
+        description: `NFC transfer commission: ${sender.username} \u2192 ${receiver.username}`
+      });
+    }
+
+    res.json({
+      success: true,
+      transactionId: transaction._id,
+      message: 'Payment sent successfully via NFC',
+      transaction: {
+        id: transaction._id,
+        sender: {
+          _id: sender._id,
+          firstName: sender.firstName,
+          lastName: sender.lastName,
+          username: sender.username,
+          profilePicture: sender.profilePicture
+        },
+        receiver: {
+          _id: receiver._id,
+          firstName: receiver.firstName,
+          lastName: receiver.lastName,
+          username: receiver.username,
+          profilePicture: receiver.profilePicture
+        },
+        amount: amount,
+        currency,
+        fee: {
+          percentage: feePercentage,
+          amount: (feeAmount / 100).toFixed(2)
+        },
+        totalDebit: (totalDebit / 100).toFixed(2),
+        status: transaction.status,
+        method: 'nfc',
+        createdAt: transaction.createdAt
+      }
+    });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'NFC payment failed' });
+  }
+};
+
+// Bill Payment
+const payBillEndpoint = async (req, res) => {
+  try {
+    const { providerId, accountNumber, amount } = req.body;
+    const userId = req.userId;
+
+    if (!providerId || !accountNumber || !amount) {
+      return res.status(400).json({ 
+        error: 'Missing required fields: providerId, accountNumber, amount' 
+      });
+    }
+
+    const user = await User.findById(userId).populate('walletId');
+    if (!user) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+
+    if (!user.walletId) {
+      return res.status(404).json({ error: 'User wallet not found' });
+    }
+
+    const amountInKobo = Math.round(amount * 100);
+
+    // Check wallet balance
+    if (user.walletId.balance < amountInKobo) {
+      return res.status(400).json({ 
+        error: 'Insufficient balance',
+        balance: user.walletId.balance / 100,
+        required: amount
+      });
+    }
+
+    // Process bill payment via OnePipe
+    const billResult = await payBill(providerId, accountNumber, amountInKobo, {
+      email: user.email,
+      phone: user.phone,
+      description: `Bill payment for account ${accountNumber}`
+    });
+
+    if (!billResult.success) {
+      return res.status(400).json({ 
+        error: billResult.error,
+        status: billResult.status
+      });
+    }
+
+    // Create transaction record
+    const transaction = new Transaction({
+      sender: userId,
+      receiver: null,
+      amount: amountInKobo,
+      currency: 'NGN',
+      type: 'bill_payment',
+      method: 'onepipe',
+      status: billResult.status === 'Successful' ? 'completed' : 'pending',
+      paystackReference: billResult.reference,
+      metadata: {
+        providerId: providerId,
+        accountNumber: accountNumber,
+        billType: 'utility'
+      }
+    });
+
+    await transaction.save();
+
+    // Debit wallet
+    user.walletId.balance -= amountInKobo;
+    await user.walletId.save();
+
+    // Record commission to internal ledger
+    const commissionRate = user.settings?.commissionRate || 1.5;
+    const commission = Math.round((amountInKobo * commissionRate) / 100);
+    
+    const commissionLedger = new CommissionLedger({
+      transactionId: transaction._id,
+      userId: userId,
+      type: 'bill_payment',
+      amount: amountInKobo,
+      commission: commission,
+      method: 'onepipe',
+      status: 'recorded'
+    });
+
+    await commissionLedger.save();
+
+    res.json({
+      success: true,
+      transactionId: transaction._id,
+      reference: billResult.reference,
+      amount: amount,
+      currency: 'NGN',
+      status: transaction.status,
+      newBalance: user.walletId.balance / 100,
+      message: billResult.message
+    });
+  } catch (err) {
+    console.error('Bill payment error:', err);
+    res.status(500).json({ error: 'Bill payment failed: ' + err.message });
+  }
+};
+
+// Buy Airtime
+const buyAirtimeEndpoint = async (req, res) => {
+  try {
+    const { networkCode, phoneNumber, amount } = req.body;
+    const userId = req.userId;
+
+    if (!networkCode || !phoneNumber || !amount) {
+      return res.status(400).json({ 
+        error: 'Missing required fields: networkCode, phoneNumber, amount' 
+      });
+    }
+
+    const user = await User.findById(userId).populate('walletId');
+    if (!user) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+
+    if (!user.walletId) {
+      return res.status(404).json({ error: 'User wallet not found' });
+    }
+
+    const amountInKobo = Math.round(amount * 100);
+
+    // Check wallet balance
+    if (user.walletId.balance < amountInKobo) {
+      return res.status(400).json({ 
+        error: 'Insufficient balance',
+        balance: user.walletId.balance / 100,
+        required: amount
+      });
+    }
+
+    // Process airtime purchase via OnePipe
+    const airtimeResult = await buyAirtime(networkCode, phoneNumber, amountInKobo, {
+      email: user.email,
+      phone: phoneNumber,
+      description: `Airtime purchase for ${phoneNumber}`
+    });
+
+    if (!airtimeResult.success) {
+      return res.status(400).json({ 
+        error: airtimeResult.error,
+        status: airtimeResult.status
+      });
+    }
+
+    // Create transaction record
+    const transaction = new Transaction({
+      sender: userId,
+      receiver: null,
+      amount: amountInKobo,
+      currency: 'NGN',
+      type: 'airtime',
+      method: 'onepipe',
+      status: airtimeResult.status === 'Successful' ? 'completed' : 'pending',
+      paystackReference: airtimeResult.reference,
+      metadata: {
+        networkCode: networkCode,
+        phoneNumber: phoneNumber,
+        serviceType: 'airtime'
+      }
+    });
+
+    await transaction.save();
+
+    // Debit wallet
+    user.walletId.balance -= amountInKobo;
+    await user.walletId.save();
+
+    // Record commission to internal ledger
+    const commissionRate = user.settings?.commissionRate || 1.5;
+    const commission = Math.round((amountInKobo * commissionRate) / 100);
+    
+    const commissionLedger = new CommissionLedger({
+      transactionId: transaction._id,
+      userId: userId,
+      type: 'airtime',
+      amount: amountInKobo,
+      commission: commission,
+      method: 'onepipe',
+      status: 'recorded'
+    });
+
+    await commissionLedger.save();
+
+    res.json({
+      success: true,
+      transactionId: transaction._id,
+      reference: airtimeResult.reference,
+      amount: amount,
+      phoneNumber: phoneNumber,
+      network: networkCode,
+      currency: 'NGN',
+      status: transaction.status,
+      newBalance: user.walletId.balance / 100,
+      message: airtimeResult.message
+    });
+  } catch (err) {
+    console.error('Airtime purchase error:', err);
+    res.status(500).json({ error: 'Airtime purchase failed: ' + err.message });
+  }
+};
+
+// Buy Data Bundle
+const buyDataBundleEndpoint = async (req, res) => {
+  try {
+    const { networkCode, phoneNumber, dataPlanId, amount } = req.body;
+    const userId = req.userId;
+
+    if (!networkCode || !phoneNumber || !dataPlanId || !amount) {
+      return res.status(400).json({ 
+        error: 'Missing required fields: networkCode, phoneNumber, dataPlanId, amount' 
+      });
+    }
+
+    const user = await User.findById(userId).populate('walletId');
+    if (!user) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+
+    if (!user.walletId) {
+      return res.status(404).json({ error: 'User wallet not found' });
+    }
+
+    const amountInKobo = Math.round(amount * 100);
+
+    // Check wallet balance
+    if (user.walletId.balance < amountInKobo) {
+      return res.status(400).json({ 
+        error: 'Insufficient balance',
+        balance: user.walletId.balance / 100,
+        required: amount
+      });
+    }
+
+    // Process data purchase via OnePipe
+    const dataResult = await buyDataBundle(networkCode, phoneNumber, dataPlanId, amountInKobo, {
+      email: user.email,
+      phone: phoneNumber,
+      description: `Data bundle ${dataPlanId} for ${phoneNumber}`
+    });
+
+    if (!dataResult.success) {
+      return res.status(400).json({ 
+        error: dataResult.error,
+        status: dataResult.status
+      });
+    }
+
+    // Create transaction record
+    const transaction = new Transaction({
+      sender: userId,
+      receiver: null,
+      amount: amountInKobo,
+      currency: 'NGN',
+      type: 'data_bundle',
+      method: 'onepipe',
+      status: dataResult.status === 'Successful' ? 'completed' : 'pending',
+      paystackReference: dataResult.reference,
+      metadata: {
+        networkCode: networkCode,
+        phoneNumber: phoneNumber,
+        dataPlanId: dataPlanId,
+        serviceType: 'data'
+      }
+    });
+
+    await transaction.save();
+
+    // Debit wallet
+    user.walletId.balance -= amountInKobo;
+    await user.walletId.save();
+
+    // Record commission to internal ledger
+    const commissionRate = user.settings?.commissionRate || 1.5;
+    const commission = Math.round((amountInKobo * commissionRate) / 100);
+    
+    const commissionLedger = new CommissionLedger({
+      transactionId: transaction._id,
+      userId: userId,
+      type: 'data_bundle',
+      amount: amountInKobo,
+      commission: commission,
+      method: 'onepipe',
+      status: 'recorded'
+    });
+
+    await commissionLedger.save();
+
+    res.json({
+      success: true,
+      transactionId: transaction._id,
+      reference: dataResult.reference,
+      amount: amount,
+      phoneNumber: phoneNumber,
+      network: networkCode,
+      dataPlan: dataPlanId,
+      currency: 'NGN',
+      status: transaction.status,
+      newBalance: user.walletId.balance / 100,
+      message: dataResult.message
+    });
+  } catch (err) {
+    console.error('Data bundle purchase error:', err);
+    res.status(500).json({ error: 'Data bundle purchase failed: ' + err.message });
+  }
+};
+
+// Get Available Data Plans
+const getDataPlansEndpoint = async (req, res) => {
+  try {
+    const { networkCode } = req.query;
+
+    if (!networkCode) {
+      return res.status(400).json({ error: 'networkCode query parameter is required' });
+    }
+
+    const dataPlans = getDataPlans(networkCode);
+
+    if (dataPlans.length === 0) {
+      return res.status(400).json({ 
+        error: 'Network not supported',
+        supportedNetworks: ['MTN', 'GLO', 'AIRTEL', '9MOBILE']
+      });
+    }
+
+    res.json({
+      success: true,
+      network: networkCode,
+      plans: dataPlans,
+      count: dataPlans.length
+    });
+  } catch (err) {
+    console.error('Get data plans error:', err);
+    res.status(500).json({ error: 'Failed to fetch data plans' });
+  }
+};
+
+// Get Available Bill Providers
+const getBillProvidersEndpoint = async (req, res) => {
+  try {
+    const { category } = req.query;
+
+    const billProviders = getBillProviders();
+
+    if (category) {
+      const providers = billProviders[category];
+      if (!providers) {
+        return res.status(400).json({ 
+          error: 'Category not found',
+          supportedCategories: Object.keys(billProviders)
+        });
+      }
+
+      return res.json({
+        success: true,
+        category: category,
+        providers: providers,
+        count: providers.length
+      });
+    }
+
+    // Return all providers by category
+    res.json({
+      success: true,
+      providers: billProviders,
+      categories: Object.keys(billProviders)
+    });
+  } catch (err) {
+    console.error('Get bill providers error:', err);
+    res.status(500).json({ error: 'Failed to fetch bill providers' });
+  }
+};
+
 module.exports = {
   sendMoney,
+  sendMoneyViaNFC,
+  transferBetweenWallets,
   lookupUser,
   getTransactionStatus,
   initializeFunding,
@@ -805,11 +1503,16 @@ module.exports = {
   getBanks,
   resolveAccount,
   initiateTransfer,
-  getTransferStatus,
+  getTransferStatus: getTransferStatusEndpoint,
   generateQrToken,
   verifyQrToken,
   acceptPaymentRequest,
   rejectPaymentRequest,
   getPendingRequests,
   requestPayment,
+  payBill: payBillEndpoint,
+  buyAirtime: buyAirtimeEndpoint,
+  buyDataBundle: buyDataBundleEndpoint,
+  getDataPlans: getDataPlansEndpoint,
+  getBillProviders: getBillProvidersEndpoint,
 };

@@ -298,10 +298,163 @@ const checkLimits = async (req, res) => {
   }
 };
 
+// Create a new wallet with specific purpose
+const createPurposeWallet = async (req, res) => {
+  try {
+    const { currency = 'NGN', purpose = 'general', name } = req.body;
+    const user = await User.findById(req.userId).populate('walletId');
+
+    if (!user?.walletId) {
+      return res.status(404).json({ error: 'Wallet not found' });
+    }
+
+    // Validate purpose
+    const validPurposes = ['general', 'savings', 'bills', 'spending', 'investment', 'emergency'];
+    if (!validPurposes.includes(purpose)) {
+      return res.status(400).json({ 
+        error: `Invalid purpose. Must be one of: ${validPurposes.join(', ')}` 
+      });
+    }
+
+    // Validate currency
+    const validCurrencies = ['USD', 'NGN'];
+    if (!validCurrencies.includes(currency)) {
+      return res.status(400).json({ 
+        error: 'Invalid currency. Only USD and NGN are supported.' 
+      });
+    }
+
+    // Check if wallet already exists
+    const existingWallet = user.walletId.getWalletByPurpose(currency, purpose);
+    if (existingWallet) {
+      return res.status(400).json({ 
+        error: `${purpose} wallet for ${currency} already exists` 
+      });
+    }
+
+    // Create the wallet
+    const wallet = user.walletId.getOrCreateWallet(currency, purpose, name);
+    user.walletId.markModified('wallets');
+    await user.walletId.save();
+
+    res.json({
+      success: true,
+      message: 'Wallet created successfully',
+      wallet: {
+        _id: wallet._id,
+        currency: wallet.currency,
+        purpose: wallet.purpose,
+        name: wallet.name,
+        balance: wallet.balance / 100,
+        dailyLimit: wallet.dailyLimit / 100,
+        monthlyLimit: wallet.monthlyLimit / 100,
+        isActive: wallet.isActive,
+        createdAt: wallet.createdAt,
+      }
+    });
+  } catch (err) {
+    console.error('Create wallet error:', err);
+    res.status(500).json({ error: 'Failed to create wallet' });
+  }
+};
+
+// Get all wallets by purpose
+const getWalletsByPurpose = async (req, res) => {
+  try {
+    const { purpose } = req.params;
+    const user = await User.findById(req.userId).populate('walletId');
+
+    if (!user?.walletId) {
+      return res.status(404).json({ error: 'Wallet not found' });
+    }
+
+    // Validate purpose
+    const validPurposes = ['general', 'savings', 'bills', 'spending', 'investment', 'emergency'];
+    if (!validPurposes.includes(purpose)) {
+      return res.status(400).json({ 
+        error: `Invalid purpose. Must be one of: ${validPurposes.join(', ')}` 
+      });
+    }
+
+    const wallets = user.walletId.getWalletsByPurpose(purpose);
+
+    res.json({
+      success: true,
+      purpose,
+      wallets: wallets.map(w => ({
+        _id: w._id,
+        currency: w.currency,
+        purpose: w.purpose,
+        name: w.name,
+        balance: w.balance / 100,
+        dailyLimit: w.dailyLimit / 100,
+        monthlyLimit: w.monthlyLimit / 100,
+        dailySpent: w.dailySpent / 100,
+        monthlySpent: w.monthlySpent / 100,
+        isActive: w.isActive,
+        createdAt: w.createdAt,
+      })),
+      totalBalance: wallets.reduce((sum, w) => sum + w.balance, 0) / 100,
+    });
+  } catch (err) {
+    console.error('Get wallets by purpose error:', err);
+    res.status(500).json({ error: 'Failed to fetch wallets' });
+  }
+};
+
+// Get all active wallets for a user (organized by purpose)
+const getAllWallets = async (req, res) => {
+  try {
+    const user = await User.findById(req.userId).populate('walletId');
+
+    if (!user?.walletId) {
+      return res.status(404).json({ error: 'Wallet not found' });
+    }
+
+    const wallet = user.walletId;
+    const purposes = ['general', 'savings', 'bills', 'spending', 'investment', 'emergency'];
+    const organizedWallets = {};
+
+    purposes.forEach(purpose => {
+      organizedWallets[purpose] = wallet.getWalletsByPurpose(purpose).map(w => ({
+        _id: w._id,
+        currency: w.currency,
+        purpose: w.purpose,
+        name: w.name,
+        balance: w.balance / 100,
+        dailyLimit: w.dailyLimit / 100,
+        monthlyLimit: w.monthlyLimit / 100,
+        dailySpent: w.dailySpent / 100,
+        monthlySpent: w.monthlySpent / 100,
+        isActive: w.isActive,
+        createdAt: w.createdAt,
+      }));
+    });
+
+    const totalBalance = wallet.wallets.reduce((sum, w) => sum + w.balance, 0);
+
+    res.json({
+      success: true,
+      wallets: organizedWallets,
+      summary: {
+        totalBalance: totalBalance / 100,
+        totalWallets: wallet.wallets.filter(w => w.isActive).length,
+        currencies: ['USD', 'NGN'],
+      }
+    });
+  } catch (err) {
+    console.error('Get all wallets error:', err);
+    res.status(500).json({ error: 'Failed to fetch wallets' });
+  }
+};
+
 module.exports = {
   getAnalytics,
   getWallets,
   getWalletByCurrency,
+  createPurposeWallet,
+  getWalletsByPurpose,
+  getAllWallets,
   addFunds,
   setLimits,
   checkLimits,

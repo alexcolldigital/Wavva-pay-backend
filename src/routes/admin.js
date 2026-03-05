@@ -36,4 +36,32 @@ router.post('/transactions/:transactionId/refund', authMiddleware, adminMiddlewa
 // Security/Monitoring routes
 router.get('/fraud-alerts', authMiddleware, adminMiddleware, adminController.getFraudAlerts);
 
+// KYC Management routes
+router.get('/kyc/pending', authMiddleware, adminMiddleware, adminController.getPendingKYC);
+router.get('/kyc/:kycId', authMiddleware, adminMiddleware, adminController.getKYCDetailsAdmin);
+router.post('/kyc/:kycId/approve', authMiddleware, adminMiddleware, adminController.approveMerchantKYC);
+router.post('/kyc/:kycId/reject', authMiddleware, adminMiddleware, adminController.rejectMerchantKYC);
+router.post('/kyc/:kycId/verify-document', authMiddleware, adminMiddleware, adminController.verifyKYCDocument);
+
+// Internal Ledger Management routes
+/**
+ * Internal Commission Ledger Endpoints (Admin Only)
+ * These endpoints provide access to platform commission tracking
+ */
+
+// Get current ledger balance
+router.get('/ledger/balance', authMiddleware, adminMiddleware, adminController.getLedgerBalance);
+
+// Get commission statistics for a period
+router.get('/ledger/stats', authMiddleware, adminMiddleware, adminController.getCommissionStats);
+
+// Get ledger entries with pagination
+router.get('/ledger/entries', authMiddleware, adminMiddleware, adminController.getLedgerEntries);
+
+// Get ledger summary (balance + monthly/all-time totals)
+router.get('/ledger/summary', authMiddleware, adminMiddleware, adminController.getLedgerSummary);
+
+// Get detailed commission breakdown report
+router.get('/ledger/report', authMiddleware, adminMiddleware, adminController.getCommissionReport);
+
 module.exports = router;
