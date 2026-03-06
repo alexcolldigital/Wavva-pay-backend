@@ -226,7 +226,15 @@ const signup = async (req, res) => {
 const login = async (req, res) => {
   try {
     const { email, password } = req.body;
-    const user = await User.findOne({ email });
+    
+    // Allow login with either email or username
+    // Check if input looks like an email
+    const isEmail = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
+    
+    // Find user by email or username
+    const user = isEmail 
+      ? await User.findOne({ email: email.toLowerCase() })
+      : await User.findOne({ username: email.toLowerCase() });
     
     if (!user || !await user.comparePassword(password)) {
       return res.status(401).json({ error: 'Invalid credentials' });
