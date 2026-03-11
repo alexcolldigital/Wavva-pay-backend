@@ -2,7 +2,10 @@ const User = require('../models/User');
 const Wallet = require('../models/Wallet');
 const Transaction = require('../models/Transaction');
 const CommissionLedger = require('../models/CommissionLedger');
-const { createTransfer, getTransferStatus, getBankList, createTransferRecipient, resolveBankAccount, initializePayment: onepipeInitializePayment, verifyPayment: onepipeVerifyPayment, payBill, buyAirtime, buyDataBundle, getDataPlans, getBillProviders } = require('../services/onepipe');
+// Flutterwave for payments, transfers, bills, airtime, data
+const flutterwaveService = require('../services/flutterwave');
+// Wema for virtual accounts, real bank accounts, interbank transfers
+const wemaService = require('../services/wema');
 const { calculateFee } = require('../utils/feeCalculator');
 const { recordCommission } = require('../services/commissionService');
 
@@ -296,7 +299,7 @@ const initializeFunding = async (req, res) => {
       return res.status(404).json({ error: 'User not found' });
     }
 
-    // For OnePipe, we don't initialize remotely - card details come from frontend
+    // For Flutterwave, we don't initialize remotely - card details come from frontend
     // This endpoint now provides payment initialization instructions
     const reference = `PAY-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
     
@@ -307,7 +310,7 @@ const initializeFunding = async (req, res) => {
       email: user.email,
       amount: amount,
       currency: currency,
-      instructions: 'Send card details (pan, cvv, expiry, pin) to process payment via OnePipe'
+      instructions: 'Send card details (pan, cvv, expiry, pin) to process payment via Flutterwave'
     });
   } catch (err) {
     console.error('Fund initialization error:', err);
@@ -315,14 +318,14 @@ const initializeFunding = async (req, res) => {
   }
 };
 
-// Verify/Process payment with OnePipe (accepts card details and verifies payment)
+// Verify/Process payment with Flutterwave (accepts card details and verifies payment)
 const verifyFunding = async (req, res) => {
   try {
     const { reference, cardDetails } = req.body;
     const userId = req.userId;
     const amount = req.body.amount || 0; // Amount that was being funded
 
-    console.log('🔍 OnePipe payment processing started:', { userId, reference });
+    console.log('🔍 Flutterwave payment processing started:', { userId, reference });
 
     if (!reference) {
       return res.status(400).json({ error: 'Payment reference required' });
@@ -341,21 +344,26 @@ const verifyFunding = async (req, res) => {
 
     let verificationResult;
 
-    // If card details provided, charge directly via OnePipe
+    // If card details provided, charge via Flutterwave
     if (cardDetails && cardDetails.pan && cardDetails.cvv && cardDetails.expiry && cardDetails.pin) {
-      console.log('💳 Processing card charge via OnePipe...');
+      console.log('💳 Processing card charge via Flutterwave...');
       const amountInKobo = Math.round(amount * 100);
       
-      const chargeResult = await onepipeInitializePayment(
+      // Split expiry (MMYY) into expiryMonth and expiryYear
+      const expiryMonth = cardDetails.expiry.substring(0, 2);
+      const expiryYear = '20' + cardDetails.expiry.substring(2, 4);
+      
+      const chargeResult = await flutterwaveService.initializeCardPayment(
         {
-          pan: cardDetails.pan,
+          cardNumber: cardDetails.pan,
           cvv: cardDetails.cvv,
-          expiry: cardDetails.expiry, // Format: MMyy
-          pin: cardDetails.pin
+          expiryMonth: expiryMonth,
+          expiryYear: expiryYear
         },
-        amountInKobo,
+        amountInKobo / 100, // Convert to NGN
         user.email,
-        { phone_no: user.phone, currency: 'NGN' }
+        user.phone,
+        { fullName: user.firstName + ' ' + user.lastName }
       );
 
       if (!chargeResult.success) {
@@ -368,12 +376,13 @@ const verifyFunding = async (req, res) => {
 
       verificationResult = chargeResult;
     } else {
-      // Otherwise, verify existing reference
+      // Otherwise, verify existing reference via Flutterwave
       console.log('🔍 Verifying existing payment reference...');
-      verificationResult = await onepipeVerifyPayment(reference);
+      // Assuming reference is the Flutterwave transaction ID
+      verificationResult = await flutterwaveService.verifyPayment(reference);
     }
 
-    console.log('✓ OnePipe result:', verificationResult);
+    console.log('✓ Flutterwave result:', verificationResult);
 
     if (!verificationResult.success) {
       console.error('❌ Payment processing failed:', verificationResult);
@@ -398,10 +407,10 @@ const verifyFunding = async (req, res) => {
       netAmount,
       type: 'wallet_funding',
       status: 'completed',
-      method: 'onepipe',
+      method: 'flutterwave',
       paystackReference: verificationResult.reference,
       paystackTransactionId: verificationResult.transactionId,
-      description: `Wallet funding via OnePipe (${verificationResult.paymentMethod || 'card'})`,
+      description: `Wallet funding via Flutterwave (${verificationResult.paymentMethod || 'card'})`,
     });
 
     await transaction.save();
@@ -444,7 +453,7 @@ const verifyFunding = async (req, res) => {
         fromUser: userId,
         feePercentage,
         grossAmount: amountInCents,
-        description: `Wallet funding commission via OnePipe (${verificationResult.paymentMethod || 'card'})`
+        description: `Wallet funding commission via Flutterwave (${verificationResult.paymentMethod || 'card'})`
       });
     }
 
@@ -474,20 +483,19 @@ const verifyFunding = async (req, res) => {
 // Get list of supported banks
 const getBanks = async (req, res) => {
   try {
-    const { getBankList } = require('../services/paystack');
-    const banksResult = await getBankList();
+    const banksResult = await flutterwaveService.getBankList();
 
     if (!banksResult.success) {
       console.warn('Bank list failed, but got fallback:', banksResult.banks?.length);
       return res.status(400).json({ error: banksResult.error });
     }
 
-    console.log(`Returning ${banksResult.banks?.length || 0} banks from ${banksResult.source || 'unknown'} source`);
+    console.log(`Returning ${banksResult.banks?.length || 0} banks from Flutterwave`);
     
     res.json({
       success: true,
       banks: banksResult.banks,
-      source: banksResult.source,
+      source: 'flutterwave',
       count: banksResult.banks?.length || 0,
     });
   } catch (err) {
@@ -506,8 +514,7 @@ const resolveAccount = async (req, res) => {
       return res.status(400).json({ error: 'Account number and bank code required' });
     }
 
-    const { resolveBankAccount } = require('../services/paystack');
-    const resolveResult = await resolveBankAccount(account_number, account_bank);
+    const resolveResult = await flutterwaveService.resolveBankAccount(account_number, account_bank);
 
     if (!resolveResult.success) {
       return res.status(400).json({ error: resolveResult.error });
@@ -558,35 +565,24 @@ const initiateTransfer = async (req, res) => {
     const totalDebit = amountInCents + feeAmount; // User pays: amount + fee
 
     // Check wallet balance (must cover amount + fee)
-    if (user.walletId.balance < totalDebit) {
+    const wallet = await Wallet.findById(user.walletId);
+    if (!wallet || wallet.balance < totalDebit) {
       return res.status(400).json({ error: 'Insufficient balance to cover amount and fee' });
     }
 
     // First, resolve the bank account to verify it exists
-    const { resolveBankAccount, createTransferRecipient } = require('../services/paystack');
-    const resolveResult = await resolveBankAccount(account_number, account_bank);
+    const resolveResult = await flutterwaveService.resolveBankAccount(account_number, account_bank);
     
     if (!resolveResult.success) {
       return res.status(400).json({ error: 'Invalid bank account: ' + resolveResult.error });
     }
 
-    // Create transfer recipient
-    const recipientResult = await createTransferRecipient(
+    // Use Flutterwave for the transfer
+    const transferResult = await flutterwaveService.createTransfer(
       account_number,
       account_bank,
-      resolveResult.accountName,
-      'nuban'
-    );
-
-    if (!recipientResult.success) {
-      return res.status(400).json({ error: 'Failed to create recipient: ' + recipientResult.error });
-    }
-
-    // Initiate bank transfer
-    const { createTransfer } = require('../services/paystack');
-    const transferResult = await createTransfer(
-      recipientResult.recipientCode,
       amount,
+      resolveResult.accountName,
       description || 'Payment from Wavva Pay'
     );
 
@@ -619,7 +615,6 @@ const initiateTransfer = async (req, res) => {
     await transaction.save();
 
     // Deduct amount + fee from wallet (funds reserved for transfer)
-    const wallet = await Wallet.findById(user.walletId);
     wallet.balance -= totalDebit;
     await wallet.save();
 
@@ -677,8 +672,8 @@ const getTransferStatusEndpoint = async (req, res) => {
       return res.status(404).json({ error: 'Transfer not found' });
     }
 
-    // Get status from OnePipe
-    const statusResult = await getTransferStatus(transferId);
+    // Get status from Flutterwave
+    const statusResult = await flutterwaveService.getTransferStatus(transferId);
 
     if (!statusResult.success) {
       return res.status(400).json({ error: statusResult.error });
@@ -1117,7 +1112,6 @@ const sendMoneyViaNFC = async (req, res) => {
   }
 };
 
-// Bill Payment
 const payBillEndpoint = async (req, res) => {
   try {
     const { providerId, accountNumber, amount } = req.body;
@@ -1149,8 +1143,8 @@ const payBillEndpoint = async (req, res) => {
       });
     }
 
-    // Process bill payment via OnePipe
-    const billResult = await payBill(providerId, accountNumber, amountInKobo, {
+    // Process bill payment via Flutterwave
+    const billResult = await flutterwaveService.payBill(providerId, accountNumber, amountInKobo, {
       email: user.email,
       phone: user.phone,
       description: `Bill payment for account ${accountNumber}`
@@ -1170,8 +1164,8 @@ const payBillEndpoint = async (req, res) => {
       amount: amountInKobo,
       currency: 'NGN',
       type: 'bill_payment',
-      method: 'onepipe',
-      status: billResult.status === 'Successful' ? 'completed' : 'pending',
+      method: 'flutterwave',
+      status: billResult.status === 'success' ? 'completed' : 'pending',
       paystackReference: billResult.reference,
       metadata: {
         providerId: providerId,
@@ -1196,7 +1190,7 @@ const payBillEndpoint = async (req, res) => {
       type: 'bill_payment',
       amount: amountInKobo,
       commission: commission,
-      method: 'onepipe',
+      method: 'flutterwave',
       status: 'recorded'
     });
 
@@ -1250,8 +1244,8 @@ const buyAirtimeEndpoint = async (req, res) => {
       });
     }
 
-    // Process airtime purchase via OnePipe
-    const airtimeResult = await buyAirtime(networkCode, phoneNumber, amountInKobo, {
+    // Process airtime purchase via Flutterwave
+    const airtimeResult = await flutterwaveService.buyAirtime(networkCode, phoneNumber, amount, {
       email: user.email,
       phone: phoneNumber,
       description: `Airtime purchase for ${phoneNumber}`
@@ -1271,8 +1265,8 @@ const buyAirtimeEndpoint = async (req, res) => {
       amount: amountInKobo,
       currency: 'NGN',
       type: 'airtime',
-      method: 'onepipe',
-      status: airtimeResult.status === 'Successful' ? 'completed' : 'pending',
+      method: 'flutterwave',
+      status: airtimeResult.status === 'success' ? 'completed' : 'pending',
       paystackReference: airtimeResult.reference,
       metadata: {
         networkCode: networkCode,
@@ -1297,7 +1291,7 @@ const buyAirtimeEndpoint = async (req, res) => {
       type: 'airtime',
       amount: amountInKobo,
       commission: commission,
-      method: 'onepipe',
+      method: 'flutterwave',
       status: 'recorded'
     });
 
@@ -1353,7 +1347,7 @@ const buyDataBundleEndpoint = async (req, res) => {
       });
     }
 
-    // Process data purchase via OnePipe
+    // Process data purchase via Flutterwave
     const dataResult = await buyDataBundle(networkCode, phoneNumber, dataPlanId, amountInKobo, {
       email: user.email,
       phone: phoneNumber,
@@ -1374,7 +1368,7 @@ const buyDataBundleEndpoint = async (req, res) => {
       amount: amountInKobo,
       currency: 'NGN',
       type: 'data_bundle',
-      method: 'onepipe',
+      method: 'flutterwave',
       status: dataResult.status === 'Successful' ? 'completed' : 'pending',
       paystackReference: dataResult.reference,
       metadata: {

@@ -83,6 +83,10 @@ app.use('/api/voice', require('./routes/voice'));
 app.use('/api/banking', require('./routes/banking'));
 app.use('/api/admin', require('./routes/admin'));
 
+// KYC Routes
+app.use('/api/kyc/user', require('./routes/userKYC'));
+app.use('/api/kyc/merchant', require('./routes/kyc'));
+
 // Merchant Routes
 app.use('/api/merchant', require('./routes/merchant'));
 app.use('/api/merchant/payment-links', require('./routes/paymentLink'));
@@ -91,10 +95,20 @@ app.use('/api/merchant/settlement', require('./routes/settlement'));
 app.use('/api/merchant/subscriptions', require('./routes/subscriptions'));
 app.use('/api/invoices', require('./routes/invoices'));
 
+// Webhook Routes
+app.use('/api/webhooks', require('./webhooks/flutterwave'));
+app.use('/api/webhooks', require('./webhooks/wema'));
+app.use('/api/webhooks', require('./webhooks/chimoney'));
+
 // Health check endpoint
 app.get('/health', (req, res) => {
   console.log('[health] Received request');
   res.json({ status: 'ok', timestamp: new Date() });
+});
+
+// Favicon handler
+app.get('/favicon.ico', (req, res) => {
+  res.status(204).send();
 });
 
 // Make io accessible to routes

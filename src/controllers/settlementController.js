@@ -2,7 +2,7 @@ const Merchant = require('../models/Merchant');
 const MerchantWallet = require('../models/MerchantWallet');
 const MerchantTransaction = require('../models/MerchantTransaction');
 const Settlement = require('../models/Settlement');
-const { createTransfer } = require('../services/onepipe');
+const flutterwaveService = require('../services/flutterwave');
 
 // Request Manual Settlement
 const requestSettlement = async (req, res) => {

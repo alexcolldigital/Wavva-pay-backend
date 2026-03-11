@@ -3,7 +3,7 @@ const Settlement = require('../models/Settlement');
 const MerchantWallet = require('../models/MerchantWallet');
 const MerchantTransaction = require('../models/MerchantTransaction');
 const Merchant = require('../models/Merchant');
-const onepipeService = require('./onepipe');
+const flutterwaveService = require('./flutterwave');
 const logger = require('../utils/logger');
 
 // Schedule settlement execution
@@ -90,22 +90,12 @@ const processSettlement = async (settlement) => {
       throw new Error('Bank account not verified');
     }
 
-    // First, create a transfer recipient from bank account details
-    const recipientResult = await paystackService.createTransferRecipient(
+    // Create the transfer using Flutterwave
+    const transferResult = await flutterwaveService.createTransfer(
       bankAccount.accountNumber,
       bankAccount.bankCode,
-      bankAccount.accountName,
-      'nuban'
-    );
-
-    if (!recipientResult.success) {
-      throw new Error(recipientResult.error || 'Failed to create transfer recipient');
-    }
-
-    // Now create the transfer using the recipient code
-    const transferResult = await paystackService.createTransfer(
-      recipientResult.recipientCode,
       settlement.amount / 100, // Convert from cents to naira
+      bankAccount.accountName,
       `Settlement for ${merchant.businessName}`
     );
 
@@ -115,18 +105,18 @@ const processSettlement = async (settlement) => {
 
     // Update settlement to processing
     settlement.status = 'processing';
-    settlement.paymentGateway = 'paystack';
+    settlement.paymentGateway = 'flutterwave';
     settlement.paymentGatewayReference = transferResult.reference;
     settlement.paymentGatewayTransactionId = transferResult.transferId;
     await settlement.save();
 
-    // Verify transfer status after a delay (Paystack processes async)
+    // Verify transfer status after a delay (Flutterwave processes async)
     // Schedule a verification job for 10 seconds later
     setTimeout(async () => {
       try {
-        const verifyResult = await paystackService.getTransferStatus(transferResult.transferId);
+        const verifyResult = await flutterwaveService.getTransferStatus(transferResult.transferId);
 
-        if (verifyResult.success && verifyResult.status === 'success') {
+        if (verifyResult.success && (verifyResult.status === 'success' || verifyResult.status === 'completed')) {
           // Mark settlement as completed
           settlement.status = 'completed';
           settlement.completedDate = new Date();

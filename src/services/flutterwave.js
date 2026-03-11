@@ -312,6 +312,211 @@ const initiateBankTransfer = async (account_number, account_bank, amount, curren
   }
 };
 
+// Pay bills (electricity, water, cable, internet)
+const payBill = async (billerId, customerReference, amount, metadata = {}) => {
+  try {
+    const payload = {
+      country: 'NG',
+      customer_id: customerReference,
+      amount: Math.round(amount),
+      type: billerId,
+      reference: `BILL-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`
+    };
+
+    const response = await flutterwaveClient.post('/bills', payload);
+
+    if (response.data.status === 'success') {
+      return {
+        success: true,
+        reference: payload.reference,
+        transactionId: response.data.data.id || response.data.data.transaction_id,
+        status: 'success',
+        amount: amount,
+        billerId: billerId,
+        message: 'Bill payment successful'
+      };
+    } else {
+      return {
+        success: false,
+        error: response.data.message || 'Bill payment failed',
+        status: response.data.status
+      };
+    }
+  } catch (err) {
+    logger.error('Flutterwave payBill error:', err.response?.data || err.message);
+    return {
+      success: false,
+      error: err.response?.data?.message || 'Bill payment failed: ' + err.message
+    };
+  }
+};
+
+// Buy airtime
+const buyAirtime = async (networkCode, phoneNumber, amount, metadata = {}) => {
+  try {
+    // Map network codes to Flutterwave biller IDs
+    const networkMappings = {
+      'MTN': 'AIRTIME_MTN',
+      'GLO': 'AIRTIME_GLO',
+      'AIRTEL': 'AIRTIME_AIRTEL',
+      '9MOBILE': 'AIRTIME_9MOBILE',
+      'mtn': 'AIRTIME_MTN',
+      'glo': 'AIRTIME_GLO',
+      'airtel': 'AIRTIME_AIRTEL',
+      '9mobile': 'AIRTIME_9MOBILE'
+    };
+
+    const billerId = networkMappings[networkCode] || `AIRTIME_${networkCode.toUpperCase()}`;
+
+    const payload = {
+      country: 'NG',
+      customer_id: phoneNumber,
+      amount: Math.round(amount),
+      type: billerId,
+      reference: `AIRTIME-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`
+    };
+
+    const response = await flutterwaveClient.post('/bills', payload);
+
+    if (response.data.status === 'success') {
+      return {
+        success: true,
+        reference: payload.reference,
+        transactionId: response.data.data.id || response.data.data.transaction_id,
+        status: 'success',
+        amount: amount,
+        phoneNumber: phoneNumber,
+        network: networkCode,
+        message: `Airtime purchase successful for ${phoneNumber}`
+      };
+    } else {
+      return {
+        success: false,
+        error: response.data.message || 'Airtime purchase failed',
+        status: response.data.status
+      };
+    }
+  } catch (err) {
+    logger.error('Flutterwave buyAirtime error:', err.response?.data || err.message);
+    return {
+      success: false,
+      error: err.response?.data?.message || 'Airtime purchase failed: ' + err.message
+    };
+  }
+};
+
+// Buy data bundle
+const buyDataBundle = async (networkCode, phoneNumber, dataPlanId, amount, metadata = {}) => {
+  try {
+    // Map network codes to Flutterwave biller IDs
+    const networkMappings = {
+      'MTN': 'DATA_MTN',
+      'GLO': 'DATA_GLO',
+      'AIRTEL': 'DATA_AIRTEL',
+      '9MOBILE': 'DATA_9MOBILE',
+      'mtn': 'DATA_MTN',
+      'glo': 'DATA_GLO',
+      'airtel': 'DATA_AIRTEL',
+      '9mobile': 'DATA_9MOBILE'
+    };
+
+    const billerId = networkMappings[networkCode] || `DATA_${networkCode.toUpperCase()}`;
+
+    const payload = {
+      country: 'NG',
+      customer_id: phoneNumber,
+      amount: Math.round(amount),
+      type: billerId,
+      reference: `DATA-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`
+    };
+
+    const response = await flutterwaveClient.post('/bills', payload);
+
+    if (response.data.status === 'success') {
+      return {
+        success: true,
+        reference: payload.reference,
+        transactionId: response.data.data.id || response.data.data.transaction_id,
+        status: 'success',
+        amount: amount,
+        phoneNumber: phoneNumber,
+        network: networkCode,
+        dataPlan: dataPlanId,
+        message: `Data bundle ${dataPlanId} purchase successful for ${phoneNumber}`
+      };
+    } else {
+      return {
+        success: false,
+        error: response.data.message || 'Data bundle purchase failed',
+        status: response.data.status
+      };
+    }
+  } catch (err) {
+    logger.error('Flutterwave buyDataBundle error:', err.response?.data || err.message);
+    return {
+      success: false,
+      error: err.response?.data?.message || 'Data bundle purchase failed: ' + err.message
+    };
+  }
+};
+
+// Get data plans
+const getDataPlans = (networkCode) => {
+  const plans = {
+    'MTN': [
+      { id: '250MB', name: '250MB', price: 25000, duration: '7 days' },
+      { id: '1GB', name: '1GB', price: 100000, duration: '7 days' },
+      { id: '2GB', name: '2GB', price: 200000, duration: '7 days' },
+      { id: '5GB', name: '5GB', price: 500000, duration: '30 days' },
+      { id: '10GB', name: '10GB', price: 1000000, duration: '30 days' },
+      { id: '20GB', name: '20GB', price: 2000000, duration: '30 days' }
+    ],
+    'GLO': [
+      { id: '171MB', name: '171MB', price: 25000, duration: '7 days' },
+      { id: '1GB', name: '1GB', price: 100000, duration: '7 days' },
+      { id: '3GB', name: '3GB', price: 250000, duration: '7 days' },
+      { id: '7GB', name: '7GB', price: 500000, duration: '30 days' },
+      { id: '14GB', name: '14GB', price: 1000000, duration: '30 days' }
+    ],
+    'AIRTEL': [
+      { id: '250MB', name: '250MB', price: 25000, duration: '7 days' },
+      { id: '1GB', name: '1GB', price: 100000, duration: '7 days' },
+      { id: '2GB', name: '2GB', price: 200000, duration: '7 days' },
+      { id: '5GB', name: '5GB', price: 500000, duration: '30 days' },
+      { id: '10GB', name: '10GB', price: 1000000, duration: '30 days' }
+    ],
+    '9MOBILE': [
+      { id: '500MB', name: '500MB', price: 25000, duration: '7 days' },
+      { id: '1.5GB', name: '1.5GB', price: 100000, duration: '7 days' },
+      { id: '3.5GB', name: '3.5GB', price: 200000, duration: '7 days' },
+      { id: '8.5GB', name: '8.5GB', price: 500000, duration: '30 days' },
+      { id: '20GB', name: '20GB', price: 1000000, duration: '30 days' }
+    ]
+  };
+
+  return plans[networkCode.toUpperCase()] || [];
+};
+
+// Get available bill payment providers
+const getBillProviders = () => {
+  return {
+    electricity: [
+      { id: 'ELECTRICITY', name: 'Electricity Providers', category: 'electricity' }
+    ],
+    water: [
+      { id: 'WATER', name: 'Water Providers', category: 'water' }
+    ],
+    internet: [
+      { id: 'INTERNET', name: 'Internet Providers', category: 'internet' }
+    ],
+    cable: [
+      { id: 'DSTV', name: 'DStv', category: 'cable' },
+      { id: 'GOTV', name: 'GoTV', category: 'cable' },
+      { id: 'STARTIMES', name: 'Startimes', category: 'cable' }
+    ]
+  };
+};
+
 module.exports = {
   initializePayment,
   verifyPayment,
@@ -321,4 +526,9 @@ module.exports = {
   resolveBankAccount,
   getBankList,
   initiateBankTransfer,
+  payBill,
+  buyAirtime,
+  buyDataBundle,
+  getDataPlans,
+  getBillProviders,
 };

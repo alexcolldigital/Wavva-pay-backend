@@ -1,6 +1,7 @@
 const jwt = require('jsonwebtoken');
 const User = require('../models/User');
 const Wallet = require('../models/Wallet');
+const wemaService = require('../services/wema');
 const { sendOTP } = require('../services/notifications');
 const { generateTokenPair, verifyToken } = require('../utils/tokenManager');
 const logger = require('../utils/logger');
@@ -172,6 +173,42 @@ const signup = async (req, res) => {
     await user.save();
     console.log('[DEBUG] Wallet reference saved');
     
+    // Create virtual account for user (Wema ALAT)
+    console.log('[DEBUG] Creating virtual account...');
+    try {
+      const virtualAccountResult = await wemaService.createVirtualAccount(
+        user._id.toString(),
+        user.email,
+        user.firstName,
+        user.lastName,
+        user.phone || '',
+        { platform: 'wavvapay' }
+      );
+      
+      if (virtualAccountResult.success) {
+        user.virtualAccount = {
+          accountNumber: virtualAccountResult.accountNumber,
+          accountName: virtualAccountResult.accountName,
+          bankCode: virtualAccountResult.bankCode,
+          bankName: virtualAccountResult.bankName,
+          status: virtualAccountResult.status,
+          accountId: virtualAccountResult.accountId,
+          reference: virtualAccountResult.reference,
+          createdAt: new Date(),
+        };
+        await user.save();
+        console.log('[DEBUG] Virtual account created and assigned:', virtualAccountResult.accountNumber);
+      } else {
+        // Virtual account creation failed but continue (non-critical)
+        logger.warn('Virtual account creation failed:', virtualAccountResult.error);
+        console.log('[WARN] Virtual account creation failed, continuing without it');
+      }
+    } catch (vatErr) {
+      // Virtual account creation failed but continue (non-critical)
+      logger.error('Virtual account creation error:', vatErr.message);
+      console.log('[WARN] Virtual account error, continuing without it:', vatErr.message);
+    }
+    
     console.log('[DEBUG] Generating tokens...');
     const { accessToken, refreshToken } = generateTokenPair(user._id);
     
@@ -193,6 +230,13 @@ const signup = async (req, res) => {
         emailVerified: user.emailVerified || false,
         kycStatus: user.kyc?.verified ? 'verified' : 'pending',
         isAdmin: user.isAdmin || false,
+        virtualAccount: user.virtualAccount ? {
+          accountNumber: user.virtualAccount.accountNumber,
+          accountName: user.virtualAccount.accountName,
+          bankCode: user.virtualAccount.bankCode,
+          bankName: user.virtualAccount.bankName,
+          status: user.virtualAccount.status
+        } : null,
         createdAt: user.createdAt
       }
     });
@@ -341,6 +385,34 @@ const googleSignIn = async (req, res) => {
       const wallet = new Wallet({ userId: user._id });
       await wallet.save();
       user.walletId = wallet._id;
+      
+      // Create virtual account for user (Wema ALAT)
+      try {
+        const virtualAccountResult = await wemaService.createVirtualAccount(
+          user._id.toString(),
+          user.email,
+          user.firstName,
+          user.lastName,
+          user.phone || '',
+          { platform: 'wavvapay' }
+        );
+        
+        if (virtualAccountResult.success) {
+          user.virtualAccount = {
+            accountNumber: virtualAccountResult.accountNumber,
+            accountName: virtualAccountResult.accountName,
+            bankCode: virtualAccountResult.bankCode,
+            bankName: virtualAccountResult.bankName,
+            status: virtualAccountResult.status,
+            accountId: virtualAccountResult.accountId,
+            reference: virtualAccountResult.reference,
+            createdAt: new Date(),
+          };
+        }
+      } catch (vatErr) {
+        logger.warn('Virtual account creation failed for Google sign-up:', vatErr.message);
+      }
+      
       await user.save();
     }
     
@@ -360,6 +432,13 @@ const googleSignIn = async (req, res) => {
         status: user.accountStatus || 'active',
         kycStatus: user.kyc?.verified ? 'verified' : 'pending',
         isAdmin: user.isAdmin || false,
+        virtualAccount: user.virtualAccount ? {
+          accountNumber: user.virtualAccount.accountNumber,
+          accountName: user.virtualAccount.accountName,
+          bankCode: user.virtualAccount.bankCode,
+          bankName: user.virtualAccount.bankName,
+          status: user.virtualAccount.status
+        } : null,
         createdAt: user.createdAt
       } 
     });

@@ -41,6 +41,17 @@ const userSchema = new mongoose.Schema({
   // Wallet reference
   walletId: { type: mongoose.Schema.Types.ObjectId, ref: 'Wallet' },
   
+  // Virtual account (Wema ALAT for receiving funds)
+  virtualAccount: {
+    accountNumber: String,
+    accountName: String,
+    bankCode: String, // '035' for Wema Bank
+    bankName: String,
+    status: String, // 'active', 'inactive', 'suspended'
+    accountId: String, // Wema account ID
+    reference: String, // Wema reference
+    createdAt: Date,
+  },
   // QR Code data
   qrCodeData: String, // Unique identifier for QR scanning
   

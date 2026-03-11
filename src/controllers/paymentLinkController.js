@@ -3,7 +3,7 @@ const PaymentLink = require('../models/PaymentLink');
 const MerchantTransaction = require('../models/MerchantTransaction');
 const MerchantWallet = require('../models/MerchantWallet');
 const QRCode = require('qrcode');
-const onepipeService = require('../services/onepipe');
+const flutterwaveService = require('../services/flutterwave');
 const axios = require('axios');
 const crypto = require('crypto');
 
@@ -397,7 +397,7 @@ const checkoutPaymentLink = async (req, res) => {
         customerName: name
       };
 
-      // Initialize OnePipe payment (frontend will send card details)
+      // Initialize Flutterwave payment (frontend will send card details)
       const reference = `PLK-${paymentLink._id}-${Date.now()}`;
       
       res.json({
@@ -427,7 +427,7 @@ const checkoutPaymentLink = async (req, res) => {
   }
 };
 
-// Update checkout function to handle OnePipe card charging
+// Update checkout function to handle Flutterwave card charging
 const checkoutPaymentLinkWithCard = async (req, res) => {
   try {
     const { linkId } = req.params;
@@ -473,21 +473,24 @@ const checkoutPaymentLinkWithCard = async (req, res) => {
     const totalFee = commission + platformFee;
     const netAmount = finalAmount - totalFee;
 
-    // Charge card via OnePipe
-    const chargeResult = await onepipeService.initializePayment(
+    // Split expiry (MMYY) into expiryMonth and expiryYear
+    const expiryMonth = cardDetails.expiry.substring(0, 2);
+    const expiryYear = '20' + cardDetails.expiry.substring(2, 4);
+
+    // Charge card via Flutterwave
+    const chargeResult = await flutterwaveService.initializeCardPayment(
       {
-        pan: cardDetails.pan,
+        cardNumber: cardDetails.pan,
         cvv: cardDetails.cvv,
-        expiry: cardDetails.expiry,
-        pin: cardDetails.pin
+        expiryMonth: expiryMonth,
+        expiryYear: expiryYear
       },
-      Math.round(finalAmount),
+      finalAmount / 100,
       email,
+      phone,
       { 
-        phone_no: phone,
-        currency: paymentLink.currency,
-        customer_name: name,
-        payment_link: linkId
+        fullName: name,
+        paymentLink: linkId
       }
     );
 
@@ -517,7 +520,7 @@ const checkoutPaymentLinkWithCard = async (req, res) => {
       paymentMethod: 'card',
       paystackReference: chargeResult.reference,
       paystackTransactionId: chargeResult.transactionId,
-      paymentGateway: 'onepipe',
+      paymentGateway: 'flutterwave',
       metadata: {
         paymentLink: linkId,
         customFields: paymentLink.customFields
@@ -590,7 +593,7 @@ const checkoutPaymentLinkLegacy = async (req, res) => {
     paymentLink.initiateCount += 1;
     await paymentLink.save();
 
-    // For card/bank payments, use OnePipe
+    // For card/bank payments, use Flutterwave
     if (['card', 'bank_transfer'].includes(paymentMethod)) {
       const reference = `PLK-${paymentLink._id}-${Date.now()}`;
       
@@ -601,7 +604,7 @@ const checkoutPaymentLinkLegacy = async (req, res) => {
         amount: finalAmount / 100,
         currency: paymentLink.currency,
         paymentMethod: paymentMethod,
-        instructions: 'Provide card details or bank details to OnePipe endpoint'
+        instructions: 'Provide card details to Flutterwave endpoint or bank transfer details'
       });
     } else {
       return res.status(400).json({ error: 'Unsupported payment method' });
@@ -643,13 +646,13 @@ const checkoutPaymentLinkOld = async (req, res) => {
       });
     }
 
-    // For card/bank payments, use OnePipe
+    // For card/bank payments, use Flutterwave
     if (['card', 'bank_transfer'].includes(paymentMethod)) {
       const reference = `PLK-${paymentLink._id}-${Date.now()}`;
       
       return res.json({
         success: true,
-        message: 'Payment initialization via OnePipe',
+        message: 'Payment initialization via Flutterwave',
         reference: reference,
         amount: paymentLink.amount / 100,
         currency: paymentLink.currency,

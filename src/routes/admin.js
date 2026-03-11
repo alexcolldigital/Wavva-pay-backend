@@ -43,6 +43,14 @@ router.post('/kyc/:kycId/approve', authMiddleware, adminMiddleware, adminControl
 router.post('/kyc/:kycId/reject', authMiddleware, adminMiddleware, adminController.rejectMerchantKYC);
 router.post('/kyc/:kycId/verify-document', authMiddleware, adminMiddleware, adminController.verifyKYCDocument);
 
+// User KYC Management routes
+router.get('/kyc/user/pending', authMiddleware, adminMiddleware, adminController.getPendingUserKYC);
+router.get('/kyc/user/:kycId', authMiddleware, adminMiddleware, adminController.getUserKYCDetailsAdmin);
+router.post('/kyc/user/:kycId/auto-verify', authMiddleware, adminMiddleware, adminController.autoVerifyUserKYCEndpoint);
+router.post('/kyc/user/:kycId/approve', authMiddleware, adminMiddleware, adminController.approveUserKYC);
+router.post('/kyc/user/:kycId/reject', authMiddleware, adminMiddleware, adminController.rejectUserKYC);
+router.post('/kyc/user/bulk-verify', authMiddleware, adminMiddleware, adminController.bulkAutoVerifyUserKYC);
+
 // Internal Ledger Management routes
 /**
  * Internal Commission Ledger Endpoints (Admin Only)

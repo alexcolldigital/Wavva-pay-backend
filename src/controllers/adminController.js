@@ -3,9 +3,11 @@ const Transaction = require('../models/Transaction');
 const Wallet = require('../models/Wallet');
 const Merchant = require('../models/Merchant');
 const MerchantKYC = require('../models/MerchantKYC');
+const UserKYC = require('../models/UserKYC');
 const CommissionLedger = require('../models/CommissionLedger');
 const logger = require('../utils/logger');
 const { getLedgerBalance, getCommissionStats, getLedgerEntries } = require('../services/commissionService');
+const { autoVerifyUserKYC, bulkAutoVerifyPending } = require('../services/kycAutoVerification');
 
 // Get platform statistics
 const getStats = async (req, res) => {
@@ -812,6 +814,239 @@ const getCommissionReport = async (req, res) => {
   }
 };
 
+// ============================================
+// USER KYC MANAGEMENT FUNCTIONS
+// ============================================
+
+/**
+ * Get All Pending User KYC Submissions
+ * GET /api/admin/kyc/user/pending
+ */
+const getPendingUserKYC = async (req, res) => {
+  try {
+    const { page = 1, limit = 20 } = req.query;
+    const skip = (page - 1) * limit;
+
+    const pendingKYCs = await UserKYC.find({ status: 'pending' })
+      .populate('userId', 'firstName lastName email phone')
+      .sort({ createdAt: -1 })
+      .skip(skip)
+      .limit(parseInt(limit));
+
+    const total = await UserKYC.countDocuments({ status: 'pending' });
+
+    res.json({
+      success: true,
+      kycSubmissions: pendingKYCs,
+      pagination: {
+        page: parseInt(page),
+        limit: parseInt(limit),
+        total,
+        pages: Math.ceil(total / limit)
+      }
+    });
+  } catch (err) {
+    logger.error('Get pending user KYC error', err.message);
+    res.status(500).json({ error: 'Failed to retrieve pending KYC submissions' });
+  }
+};
+
+/**
+ * Get User KYC Details (Admin View)
+ * GET /api/admin/kyc/user/:kycId
+ */
+const getUserKYCDetailsAdmin = async (req, res) => {
+  try {
+    const { kycId } = req.params;
+
+    const kyc = await UserKYC.findById(kycId)
+      .populate('userId', 'firstName lastName email phone');
+
+    if (!kyc) {
+      return res.status(404).json({ error: 'KYC record not found' });
+    }
+
+    res.json({
+      success: true,
+      kyc: {
+        _id: kyc._id,
+        user: kyc.userId,
+        idType: kyc.idType,
+        idNumber: kyc.idNumber,
+        idDocumentUrl: kyc.idDocument,
+        selfieUrl: kyc.selfieDocument,
+        address: kyc.address,
+        status: kyc.status,
+        verified: kyc.verified,
+        kycLevel: kyc.kycLevel,
+        rejectionReason: kyc.rejectionReason,
+        submissions: kyc.submissions || [],
+        flaggedForReview: kyc.flaggedForReview,
+        complianceNotes: kyc.complianceNotes,
+        createdAt: kyc.createdAt
+      }
+    });
+  } catch (err) {
+    logger.error('Get user KYC details admin error', err.message);
+    res.status(500).json({ error: 'Failed to retrieve KYC details' });
+  }
+};
+
+/**
+ * Auto-Verify User KYC
+ * POST /api/admin/kyc/user/:kycId/auto-verify
+ */
+const autoVerifyUserKYCEndpoint = async (req, res) => {
+  try {
+    const { kycId } = req.params;
+
+    const result = await autoVerifyUserKYC(kycId);
+
+    if (result.success) {
+      res.json({
+        success: true,
+        message: result.message,
+        kycLevel: result.kycLevel,
+        verified: result.verified
+      });
+    } else {
+      res.status(400).json({
+        success: false,
+        message: result.message,
+        error: result.error
+      });
+    }
+  } catch (err) {
+    logger.error('Auto-verify user KYC error', err.message);
+    res.status(500).json({ error: 'Failed to auto-verify KYC' });
+  }
+};
+
+/**
+ * Approve User KYC
+ * POST /api/admin/kyc/user/:kycId/approve
+ */
+const approveUserKYC = async (req, res) => {
+  try {
+    const { kycId } = req.params;
+    const { comment = '', kycLevel = 2 } = req.body;
+
+    const kyc = await UserKYC.findById(kycId);
+    if (!kyc) {
+      return res.status(404).json({ error: 'KYC record not found' });
+    }
+
+    // Update KYC status
+    kyc.status = 'approved';
+    kyc.verified = true;
+    kyc.verifiedDate = new Date();
+    kyc.kycLevel = kycLevel;
+
+    // Set expiry (2 years from verification)
+    const expiryDate = new Date();
+    expiryDate.setFullYear(expiryDate.getFullYear() + 2);
+    kyc.expiryDate = expiryDate;
+
+    kyc.submissions = kyc.submissions || [];
+    kyc.submissions.push({
+      submittedAt: new Date(),
+      status: 'approved',
+      comment: comment || 'KYC approved by admin',
+      reviewedBy: req.userId
+    });
+
+    await kyc.save();
+
+    logger.info(`✅ User KYC approved: ${kyc.userId} (Level ${kycLevel})`);
+
+    res.json({
+      success: true,
+      message: 'User KYC approved successfully',
+      kyc: {
+        _id: kyc._id,
+        status: kyc.status,
+        verified: kyc.verified,
+        kycLevel: kyc.kycLevel
+      }
+    });
+  } catch (err) {
+    logger.error('Approve user KYC error', err.message);
+    res.status(500).json({ error: 'Failed to approve KYC' });
+  }
+};
+
+/**
+ * Reject User KYC
+ * POST /api/admin/kyc/user/:kycId/reject
+ */
+const rejectUserKYC = async (req, res) => {
+  try {
+    const { kycId } = req.params;
+    const { rejectionReason = 'KYC requirements not met' } = req.body;
+
+    if (!rejectionReason) {
+      return res.status(400).json({ error: 'Rejection reason is required' });
+    }
+
+    const kyc = await UserKYC.findById(kycId);
+    if (!kyc) {
+      return res.status(404).json({ error: 'KYC record not found' });
+    }
+
+    // Update KYC status
+    kyc.status = 'rejected';
+    kyc.verified = false;
+    kyc.rejectionDate = new Date();
+    kyc.rejectionReason = rejectionReason;
+
+    kyc.submissions = kyc.submissions || [];
+    kyc.submissions.push({
+      submittedAt: new Date(),
+      status: 'rejected',
+      comment: rejectionReason,
+      reviewedBy: req.userId
+    });
+
+    await kyc.save();
+
+    logger.info(`❌ User KYC rejected: ${kyc.userId}`);
+
+    res.json({
+      success: true,
+      message: 'User KYC rejected successfully',
+      kyc: {
+        _id: kyc._id,
+        status: kyc.status,
+        rejectionReason: kyc.rejectionReason
+      }
+    });
+  } catch (err) {
+    logger.error('Reject user KYC error', err.message);
+    res.status(500).json({ error: 'Failed to reject KYC' });
+  }
+};
+
+/**
+ * Bulk Auto-Verify Pending User KYCs
+ * POST /api/admin/kyc/user/bulk-verify
+ */
+const bulkAutoVerifyUserKYC = async (req, res) => {
+  try {
+    const { limit = 100 } = req.body;
+
+    const result = await bulkAutoVerifyPending(limit);
+
+    res.json({
+      success: true,
+      message: `Batch processing completed: ${result.verifiedCount} verified, ${result.failedCount} flagged`,
+      ...result
+    });
+  } catch (err) {
+    logger.error('Bulk auto-verify user KYC error', err.message);
+    res.status(500).json({ error: 'Failed to bulk verify KYC' });
+  }
+};
+
 module.exports = {
   getStats,
   getUsers,
@@ -826,6 +1061,13 @@ module.exports = {
   approveMerchantKYC,
   rejectMerchantKYC,
   verifyKYCDocument,
+  // User KYC functions
+  getPendingUserKYC,
+  getUserKYCDetailsAdmin,
+  autoVerifyUserKYCEndpoint,
+  approveUserKYC,
+  rejectUserKYC,
+  bulkAutoVerifyUserKYC,
   getLedgerBalance: getLedgerBalance_endpoint,
   getCommissionStats: getCommissionStats_endpoint,
   getLedgerEntries: getLedgerEntries_endpoint,
