@@ -65,7 +65,7 @@ const getWallets = async (req, res) => {
     const user = await User.findById(req.userId).populate('walletId');
     
     if (!user?.walletId) {
-      return res.status(404).json({ error: 'Wallet not found' });
+      return res.status(404).json({ success: false, error: 'Wallet not found' });
     }
 
     const wallet = user.walletId;
@@ -77,22 +77,29 @@ const getWallets = async (req, res) => {
     wallet.markModified('wallets');
     await wallet.save();
 
+    // Return wallets as array for mobile app compatibility
+    const walletsArray = wallet.wallets.map((w) => ({
+      id: w._id?.toString() || w._id,
+      name: w.name || `${w.currency} ${w.purpose || 'Wallet'}`,
+      currency: w.currency,
+      balance: w.balance / 100,
+      dailyLimit: w.dailyLimit / 100,
+      monthlyLimit: w.monthlyLimit / 100,
+      dailySpent: w.dailySpent / 100,
+      monthlySpent: w.monthlySpent / 100,
+      purpose: w.purpose || 'general',
+      isActive: w.isActive,
+      isDefault: w.purpose === 'general' && w.currency === 'NGN',
+      createdAt: w.createdAt,
+    }));
+
     res.json({
       success: true,
-      wallets: {
-        ngn: {
-          currency: 'NGN',
-          balance: nairaWallet.balance / 100,
-          dailyLimit: nairaWallet.dailyLimit / 100,
-          monthlyLimit: nairaWallet.monthlyLimit / 100,
-          dailySpent: nairaWallet.dailySpent / 100,
-          monthlySpent: nairaWallet.monthlySpent / 100,
-        },
-      }
+      data: walletsArray
     });
   } catch (err) {
     console.error('Error fetching wallets:', err);
-    res.status(500).json({ error: 'Failed to fetch wallet' });
+    res.status(500).json({ success: false, error: 'Failed to fetch wallet' });
   }
 };
 
@@ -324,15 +331,7 @@ const createPurposeWallet = async (req, res) => {
       });
     }
 
-    // Check if wallet already exists
-    const existingWallet = user.walletId.getWalletByPurpose(currency, purpose);
-    if (existingWallet) {
-      return res.status(400).json({ 
-        error: `${purpose} wallet for ${currency} already exists` 
-      });
-    }
-
-    // Create the wallet
+    // Create the wallet (allow multiple wallets with same purpose but different names)
     const wallet = user.walletId.getOrCreateWallet(currency, purpose, name);
     user.walletId.markModified('wallets');
     await user.walletId.save();

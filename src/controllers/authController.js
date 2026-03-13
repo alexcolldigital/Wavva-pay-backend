@@ -159,9 +159,15 @@ const signup = async (req, res) => {
       wallets: [
         {
           currency: 'NGN',
+          purpose: 'general',
+          name: 'NGN Wallet',
           balance: 0,
           dailyLimit: 10000 * 100,
           monthlyLimit: 100000 * 100,
+          dailySpent: 0,
+          monthlySpent: 0,
+          isActive: true,
+          createdAt: new Date(),
         }
       ]
     });
