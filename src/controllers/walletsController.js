@@ -447,6 +447,44 @@ const getAllWallets = async (req, res) => {
   }
 };
 
+// Delete a wallet by ID
+const deleteWallet = async (req, res) => {
+  try {
+    const { walletId } = req.params;
+    const user = await User.findById(req.userId).populate('walletId');
+
+    if (!user?.walletId) {
+      return res.status(404).json({ error: 'Wallet not found' });
+    }
+
+    // Find and mark wallet as inactive instead of deleting
+    const wallet = user.walletId.wallets.find(w => w._id.toString() === walletId);
+    if (!wallet) {
+      return res.status(404).json({ error: 'Wallet not found' });
+    }
+
+    // Don't allow deleting if wallet has balance
+    if (wallet.balance > 0) {
+      return res.status(400).json({ 
+        error: 'Cannot delete wallet with remaining balance. Please withdraw all funds first.' 
+      });
+    }
+
+    // Mark as inactive
+    wallet.isActive = false;
+    user.walletId.markModified('wallets');
+    await user.walletId.save();
+
+    res.json({
+      success: true,
+      message: 'Wallet deleted successfully'
+    });
+  } catch (err) {
+    console.error('Delete wallet error:', err);
+    res.status(500).json({ error: 'Failed to delete wallet' });
+  }
+};
+
 module.exports = {
   getAnalytics,
   getWallets,
@@ -457,4 +495,5 @@ module.exports = {
   addFunds,
   setLimits,
   checkLimits,
+  deleteWallet,
 };

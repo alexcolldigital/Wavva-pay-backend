@@ -10,6 +10,7 @@ const {
   addFunds,
   setLimits,
   checkLimits,
+  deleteWallet,
 } = require('../controllers/walletsController');
 
 const router = express.Router();
@@ -25,6 +26,9 @@ router.get('/analytics', authMiddleware, getAnalytics);
 
 // Create a new wallet with purpose
 router.post('/create-purpose-wallet', authMiddleware, createPurposeWallet);
+
+// Delete a wallet
+router.delete('/:walletId', authMiddleware, deleteWallet);
 
 // Get wallets by purpose
 router.get('/by-purpose/:purpose', authMiddleware, getWalletsByPurpose);
