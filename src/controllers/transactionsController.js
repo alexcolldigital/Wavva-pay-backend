@@ -1,4 +1,53 @@
 const Transaction = require('../models/Transaction');
+const logger = require('../utils/logger');
+
+// Import socket handler for real-time notifications
+let io;
+try {
+  io = require('../websockets/socketHandler');
+} catch (err) {
+  logger.warn('Socket handler not available for real-time notifications');
+}
+
+/**
+ * Emit real-time transaction update to relevant users
+ * @param {Object} transaction - Transaction object
+ * @param {string} eventType - Type of event (created, updated, status_changed)
+ */
+const emitTransactionUpdate = (transaction, eventType = 'updated') => {
+  if (!io || !io.io) return;
+
+  try {
+    const transactionData = {
+      id: transaction._id,
+      type: transaction.type,
+      amount: transaction.amount,
+      status: transaction.status,
+      senderId: transaction.sender,
+      receiverId: transaction.receiver,
+      timestamp: transaction.createdAt || transaction.updatedAt,
+      eventType
+    };
+
+    // Emit to sender if exists
+    if (transaction.sender) {
+      io.io.to(`user:${transaction.sender}`).emit('transaction:update', transactionData);
+    }
+
+    // Emit to receiver if exists and different from sender
+    if (transaction.receiver && transaction.receiver.toString() !== transaction.sender?.toString()) {
+      io.io.to(`user:${transaction.receiver}`).emit('transaction:update', transactionData);
+    }
+
+    logger.info(`Real-time transaction update emitted: ${eventType}`, {
+      transactionId: transaction._id,
+      sender: transaction.sender,
+      receiver: transaction.receiver
+    });
+  } catch (err) {
+    logger.error('Failed to emit real-time transaction update:', err.message);
+  }
+};
 
 // Get all transactions for user
 const getTransactions = async (req, res) => {
@@ -91,4 +140,5 @@ module.exports = {
   getTransactions,
   getTransactionDetails,
   getTransactionSummary,
+  emitTransactionUpdate,
 };

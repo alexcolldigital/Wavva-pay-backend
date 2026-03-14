@@ -6,6 +6,15 @@ const User = require('../models/User');
 const logger = require('../utils/logger');
 const router = express.Router();
 
+// Import real-time notification helper
+let emitTransactionUpdate;
+try {
+  emitTransactionUpdate = require('../controllers/transactionsController').emitTransactionUpdate;
+} catch (err) {
+  logger.warn('Transaction controller not available for real-time notifications');
+  emitTransactionUpdate = () => {}; // No-op function
+}
+
 /**
  * Wema Bank Webhook Handler
  * Handles virtual account transfers and settlement events
@@ -83,10 +92,16 @@ router.post('/wema-account-credit', async (req, res) => {
         });
 
         await transaction.save();
+        
+        // Emit real-time update
+        emitTransactionUpdate(transaction, 'status_changed');
       } else {
         // Update existing transaction
         transaction.status = 'completed';
         await transaction.save();
+        
+        // Emit real-time update
+        emitTransactionUpdate(transaction, 'status_changed');
       }
 
       // Credit user wallet

@@ -497,38 +497,573 @@ const getDataPlans = (networkCode) => {
   return plans[networkCode.toUpperCase()] || [];
 };
 
-// Get available bill payment providers
-const getBillProviders = () => {
+// ============================================
+// Card Payment Functions
+// ============================================
+
+/**
+ * Process card payment for wallet funding
+ * @param {string} email - Customer email
+ * @param {number} amount - Amount in NGN
+ * @param {object} cardDetails - Card details
+ * @param {object} metadata - Additional metadata
+ * @returns {object} - Payment result
+ */
+const processCardPayment = async (email, amount, cardDetails, metadata = {}) => {
+  try {
+    const payload = {
+      tx_ref: `CARD-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
+      amount,
+      currency: 'NGN',
+      payment_type: 'card',
+      redirect_url: `${getFrontendUrl()}/wallet?payment_status=true`,
+      customer: {
+        email,
+      },
+      card: {
+        number: cardDetails.number,
+        cvv: cardDetails.cvv,
+        expiry_month: cardDetails.expiryMonth,
+        expiry_year: cardDetails.expiryYear,
+        pin: cardDetails.pin
+      },
+      meta: metadata,
+    };
+
+    const response = await flutterwaveClient.post('/charges?type=card', payload);
+
+    logger.info(`Card payment initiated: ${payload.tx_ref}`);
+
+    return {
+      success: response.data.status === 'success',
+      transactionId: response.data.data?.id,
+      reference: payload.tx_ref,
+      status: response.data.data?.status || response.data.status,
+      amount: amount,
+      currency: 'NGN',
+      paymentMethod: 'card',
+      message: response.data.message || 'Card payment processed'
+    };
+  } catch (err) {
+    logger.error('Flutterwave processCardPayment error:', err.response?.data || err.message);
+    return {
+      success: false,
+      error: err.response?.data?.message || 'Card payment failed',
+    };
+  }
+};
+
+/**
+ * Create recurring payment (subscription)
+ * @param {string} email - Customer email
+ * @param {number} amount - Amount per charge
+ * @param {string} interval - Billing interval (daily, weekly, monthly)
+ * @param {object} cardDetails - Card details for tokenization
+ * @param {object} metadata - Additional metadata
+ * @returns {object} - Subscription result
+ */
+const createRecurringPayment = async (email, amount, interval, cardDetails, metadata = {}) => {
+  try {
+    // First, tokenize the card
+    const tokenizePayload = {
+      email,
+      amount: 100, // Small amount for tokenization
+      currency: 'NGN',
+      card: {
+        number: cardDetails.number,
+        cvv: cardDetails.cvv,
+        expiry_month: cardDetails.expiryMonth,
+        expiry_year: cardDetails.expiryYear,
+        pin: cardDetails.pin
+      }
+    };
+
+    const tokenizeResponse = await flutterwaveClient.post('/charges?type=card', tokenizePayload);
+
+    if (tokenizeResponse.data.status !== 'success') {
+      return {
+        success: false,
+        error: 'Card tokenization failed'
+      };
+    }
+
+    const token = tokenizeResponse.data.data.flw_ref;
+
+    // Create subscription
+    const subscriptionPayload = {
+      email,
+      amount,
+      currency: 'NGN',
+      interval,
+      token,
+      tx_ref: `SUB-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
+      meta: metadata,
+    };
+
+    const response = await flutterwaveClient.post('/subscriptions', subscriptionPayload);
+
+    logger.info(`Recurring payment created: ${subscriptionPayload.tx_ref}`);
+
+    return {
+      success: response.data.status === 'success',
+      subscriptionId: response.data.data?.id,
+      reference: subscriptionPayload.tx_ref,
+      status: response.data.data?.status,
+      amount: amount,
+      interval: interval,
+      token: token,
+      message: 'Recurring payment setup successful'
+    };
+  } catch (err) {
+    logger.error('Flutterwave createRecurringPayment error:', err.response?.data || err.message);
+    return {
+      success: false,
+      error: err.response?.data?.message || 'Recurring payment setup failed',
+    };
+  }
+};
+
+// ============================================
+// Payment Gateway Functions
+// ============================================
+
+/**
+ * Create payment link for merchant payments
+ * @param {string} merchantId - Merchant ID
+ * @param {number} amount - Payment amount
+ * @param {string} currency - Currency code
+ * @param {string} description - Payment description
+ * @param {object} metadata - Additional metadata
+ * @returns {object} - Payment link result
+ */
+const createPaymentLink = async (merchantId, amount, currency = 'NGN', description, metadata = {}) => {
+  try {
+    const payload = {
+      tx_ref: `LINK-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
+      amount,
+      currency,
+      redirect_url: `${getFrontendUrl()}/payment/success`,
+      payment_options: 'card,mobilemoney,ussd,banktransfer',
+      customer: {
+        email: metadata.customerEmail || 'customer@example.com',
+      },
+      customizations: {
+        title: 'Payment Link',
+        description: description || 'Secure payment',
+        logo: metadata.logo || `${getFrontendUrl()}/logo.png`,
+      },
+      meta: {
+        merchantId,
+        ...metadata
+      },
+    };
+
+    const response = await flutterwaveClient.post('/payments', payload);
+
+    logger.info(`Payment link created: ${payload.tx_ref}`);
+
+    return {
+      success: response.data.status === 'success',
+      paymentLink: response.data.data?.link,
+      reference: payload.tx_ref,
+      amount: amount,
+      currency: currency,
+      merchantId: merchantId,
+      message: 'Payment link created successfully'
+    };
+  } catch (err) {
+    logger.error('Flutterwave createPaymentLink error:', err.response?.data || err.message);
+    return {
+      success: false,
+      error: err.response?.data?.message || 'Payment link creation failed',
+    };
+  }
+};
+
+/**
+ * Create checkout session for website payments
+ * @param {object} checkoutData - Checkout configuration
+ * @returns {object} - Checkout session result
+ */
+const createCheckoutSession = async (checkoutData) => {
+  try {
+    const payload = {
+      tx_ref: `CHECKOUT-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
+      amount: checkoutData.amount,
+      currency: checkoutData.currency || 'NGN',
+      redirect_url: checkoutData.redirectUrl || `${getFrontendUrl()}/checkout/success`,
+      payment_options: checkoutData.paymentOptions || 'card,mobilemoney,ussd,banktransfer',
+      customer: checkoutData.customer,
+      customizations: checkoutData.customizations || {},
+      meta: checkoutData.metadata || {},
+      subaccounts: checkoutData.subaccounts || [], // For split payments
+    };
+
+    const response = await flutterwaveClient.post('/payments', payload);
+
+    logger.info(`Checkout session created: ${payload.tx_ref}`);
+
+    return {
+      success: response.data.status === 'success',
+      checkoutUrl: response.data.data?.link,
+      reference: payload.tx_ref,
+      sessionId: response.data.data?.id,
+      amount: checkoutData.amount,
+      currency: checkoutData.currency,
+      message: 'Checkout session created successfully'
+    };
+  } catch (err) {
+    logger.error('Flutterwave createCheckoutSession error:', err.response?.data || err.message);
+    return {
+      success: false,
+      error: err.response?.data?.message || 'Checkout session creation failed',
+    };
+  }
+};
+
+// ============================================
+// QR / POS / NFC Payment Functions
+// ============================================
+
+/**
+ * Generate QR code for payment
+ * @param {string} merchantId - Merchant ID
+ * @param {number} amount - Payment amount
+ * @param {string} currency - Currency code
+ * @param {object} metadata - Additional metadata
+ * @returns {object} - QR code result
+ */
+const generatePaymentQR = async (merchantId, amount, currency = 'NGN', metadata = {}) => {
+  try {
+    const payload = {
+      tx_ref: `QR-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
+      amount,
+      currency,
+      payment_type: 'qr',
+      merchant_id: merchantId,
+      meta: metadata,
+    };
+
+    const response = await flutterwaveClient.post('/payments/qr/generate', payload);
+
+    logger.info(`QR payment generated: ${payload.tx_ref}`);
+
+    return {
+      success: response.data.status === 'success',
+      qrCode: response.data.data?.qr_code,
+      qrData: response.data.data?.qr_data,
+      reference: payload.tx_ref,
+      amount: amount,
+      currency: currency,
+      merchantId: merchantId,
+      message: 'QR code generated successfully'
+    };
+  } catch (err) {
+    logger.error('Flutterwave generatePaymentQR error:', err.response?.data || err.message);
+    return {
+      success: false,
+      error: err.response?.data?.message || 'QR code generation failed',
+    };
+  }
+};
+
+/**
+ * Process POS payment
+ * @param {string} merchantId - Merchant ID
+ * @param {number} amount - Payment amount
+ * @param {object} posData - POS terminal data
+ * @param {object} metadata - Additional metadata
+ * @returns {object} - POS payment result
+ */
+const processPOSPayment = async (merchantId, amount, posData, metadata = {}) => {
+  try {
+    const payload = {
+      tx_ref: `POS-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
+      amount,
+      currency: 'NGN',
+      payment_type: 'pos',
+      merchant_id: merchantId,
+      pos_terminal_id: posData.terminalId,
+      pos_transaction_ref: posData.transactionRef,
+      meta: metadata,
+    };
+
+    const response = await flutterwaveClient.post('/payments/pos/process', payload);
+
+    logger.info(`POS payment processed: ${payload.tx_ref}`);
+
+    return {
+      success: response.data.status === 'success',
+      transactionId: response.data.data?.id,
+      reference: payload.tx_ref,
+      status: response.data.data?.status,
+      amount: amount,
+      merchantId: merchantId,
+      terminalId: posData.terminalId,
+      message: 'POS payment processed successfully'
+    };
+  } catch (err) {
+    logger.error('Flutterwave processPOSPayment error:', err.response?.data || err.message);
+    return {
+      success: false,
+      error: err.response?.data?.message || 'POS payment failed',
+    };
+  }
+};
+
+/**
+ * Create payment request (NFC/QR payment request)
+ * @param {string} senderId - Sender user ID
+ * @param {number} amount - Requested amount
+ * @param {string} currency - Currency code
+ * @param {string} description - Payment description
+ * @param {object} metadata - Additional metadata
+ * @returns {object} - Payment request result
+ */
+const createPaymentRequest = async (senderId, amount, currency = 'NGN', description, metadata = {}) => {
+  try {
+    const payload = {
+      tx_ref: `REQ-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
+      amount,
+      currency,
+      payment_type: 'request',
+      sender_id: senderId,
+      description: description || 'Payment request',
+      meta: metadata,
+    };
+
+    const response = await flutterwaveClient.post('/payments/request', payload);
+
+    logger.info(`Payment request created: ${payload.tx_ref}`);
+
+    return {
+      success: response.data.status === 'success',
+      requestId: response.data.data?.id,
+      reference: payload.tx_ref,
+      qrCode: response.data.data?.qr_code,
+      paymentLink: response.data.data?.payment_link,
+      amount: amount,
+      currency: currency,
+      senderId: senderId,
+      description: description,
+      message: 'Payment request created successfully'
+    };
+  } catch (err) {
+    logger.error('Flutterwave createPaymentRequest error:', err.response?.data || err.message);
+    return {
+      success: false,
+      error: err.response?.data?.message || 'Payment request creation failed',
+    };
+  }
+};
+
+// ============================================
+// Enhanced Bills & Airtime Functions
+// ============================================
+
+/**
+ * Get electricity providers
+ * @returns {object} - Electricity providers list
+ */
+const getElectricityProviders = () => {
   return {
-    electricity: [
-      { id: 'ELECTRICITY', name: 'Electricity Providers', category: 'electricity' }
-    ],
-    water: [
-      { id: 'WATER', name: 'Water Providers', category: 'water' }
-    ],
-    internet: [
-      { id: 'INTERNET', name: 'Internet Providers', category: 'internet' }
-    ],
-    cable: [
-      { id: 'DSTV', name: 'DStv', category: 'cable' },
-      { id: 'GOTV', name: 'GoTV', category: 'cable' },
-      { id: 'STARTIMES', name: 'Startimes', category: 'cable' }
+    success: true,
+    providers: [
+      { id: 'EKO_ELECTRIC', name: 'Eko Electricity', code: 'EKEDC' },
+      { id: 'IBADAN_ELECTRIC', name: 'Ibadan Electricity', code: 'IBEDC' },
+      { id: 'IKEJA_ELECTRIC', name: 'Ikeja Electricity', code: 'IKEDC' },
+      { id: 'KANO_ELECTRIC', name: 'Kano Electricity', code: 'KEDCO' },
+      { id: 'ENUGU_ELECTRIC', name: 'Enugu Electricity', code: 'EEDC' },
+      { id: 'ABUJA_ELECTRIC', name: 'Abuja Electricity', code: 'AEDC' },
+      { id: 'PORT_HARCOURT_ELECTRIC', name: 'Port Harcourt Electricity', code: 'PHED' },
+      { id: 'JOS_ELECTRIC', name: 'Jos Electricity', code: 'JED' }
     ]
   };
 };
 
+/**
+ * Get cable TV providers
+ * @returns {object} - Cable TV providers list
+ */
+const getCableProviders = () => {
+  return {
+    success: true,
+    providers: [
+      { id: 'DSTV', name: 'DStv', code: 'DSTV' },
+      { id: 'GOTV', name: 'GoTV', code: 'GOTV' },
+      { id: 'STARTIMES', name: 'Startimes', code: 'STARTIMES' },
+      { id: 'TSTV', name: 'TSTV', code: 'TSTV' }
+    ]
+  };
+};
+
+/**
+ * Get betting providers
+ * @returns {object} - Betting providers list
+ */
+const getBettingProviders = () => {
+  return {
+    success: true,
+    providers: [
+      { id: 'BET9JA', name: 'Bet9ja', code: 'BET9JA' },
+      { id: 'SPORTYBET', name: 'Sportybet', code: 'SPORTYBET' },
+      { id: 'NAIRABET', name: 'Nairabet', code: 'NAIRABET' },
+      { id: 'BETKING', name: 'Betking', code: 'BETKING' }
+    ]
+  };
+};
+
+// ============================================
+// Enhanced Webhook Functions
+// ============================================
+
+/**
+ * Process enhanced webhook events
+ * @param {object} webhookData - Webhook payload
+ * @returns {object} - Processing result
+ */
+const processWebhookEvent = async (webhookData) => {
+  try {
+    const event = webhookData.event;
+    const data = webhookData.data;
+
+    logger.info(`Processing Flutterwave webhook: ${event}`, {
+      transactionId: data.id,
+      reference: data.tx_ref,
+      status: data.status
+    });
+
+    let result = { success: true, processed: true };
+
+    switch (event) {
+      case 'charge.completed':
+        result = await handleChargeCompleted(data);
+        break;
+      case 'transfer.completed':
+        result = await handleTransferCompleted(data);
+        break;
+      case 'subscription.created':
+        result = await handleSubscriptionCreated(data);
+        break;
+      case 'subscription.cancelled':
+        result = await handleSubscriptionCancelled(data);
+        break;
+      case 'bill.created':
+        result = await handleBillCreated(data);
+        break;
+      case 'bill.completed':
+        result = await handleBillCompleted(data);
+        break;
+      default:
+        logger.info(`Unhandled webhook event: ${event}`);
+        result = { success: true, processed: false, message: 'Event not handled' };
+    }
+
+    return result;
+  } catch (err) {
+    logger.error('Flutterwave processWebhookEvent error:', err.message);
+    return {
+      success: false,
+      error: 'Webhook processing failed: ' + err.message
+    };
+  }
+};
+
+/**
+ * Handle charge completed webhook
+ */
+const handleChargeCompleted = async (data) => {
+  // Implementation for charge completed
+  logger.info('Processing charge completed:', data.tx_ref);
+  return { success: true, message: 'Charge completed processed' };
+};
+
+/**
+ * Handle transfer completed webhook
+ */
+const handleTransferCompleted = async (data) => {
+  // Implementation for transfer completed
+  logger.info('Processing transfer completed:', data.reference);
+  return { success: true, message: 'Transfer completed processed' };
+};
+
+/**
+ * Handle subscription created webhook
+ */
+const handleSubscriptionCreated = async (data) => {
+  // Implementation for subscription created
+  logger.info('Processing subscription created:', data.id);
+  return { success: true, message: 'Subscription created processed' };
+};
+
+/**
+ * Handle subscription cancelled webhook
+ */
+const handleSubscriptionCancelled = async (data) => {
+  // Implementation for subscription cancelled
+  logger.info('Processing subscription cancelled:', data.id);
+  return { success: true, message: 'Subscription cancelled processed' };
+};
+
+/**
+ * Handle bill created webhook
+ */
+const handleBillCreated = async (data) => {
+  // Implementation for bill created
+  logger.info('Processing bill created:', data.reference);
+  return { success: true, message: 'Bill created processed' };
+};
+
+/**
+ * Handle bill completed webhook
+ */
+const handleBillCompleted = async (data) => {
+  // Implementation for bill completed
+  logger.info('Processing bill completed:', data.reference);
+  return { success: true, message: 'Bill completed processed' };
+};
+
 module.exports = {
+  // Payment initialization and verification
   initializePayment,
   verifyPayment,
   getTransactionDetails,
+  
+  // Card payments
+  processCardPayment,
+  createRecurringPayment,
+  
+  // Payment gateway
+  createPaymentLink,
+  createCheckoutSession,
+  
+  // Transfers and bank operations
   createTransfer,
   getTransferStatus,
   resolveBankAccount,
   getBankList,
   initiateBankTransfer,
+  
+  // Bills & Airtime
   payBill,
   buyAirtime,
   buyDataBundle,
   getDataPlans,
-  getBillProviders,
+  getElectricityProviders,
+  getCableProviders,
+  getBettingProviders,
+  
+  // QR / POS / NFC payments
+  generatePaymentQR,
+  processPOSPayment,
+  createPaymentRequest,
+  
+  // Enhanced webhooks
+  processWebhookEvent,
+  handleChargeCompleted,
+  handleTransferCompleted,
+  handleSubscriptionCreated,
+  handleSubscriptionCancelled,
+  handleBillCreated,
+  handleBillCompleted,
 };

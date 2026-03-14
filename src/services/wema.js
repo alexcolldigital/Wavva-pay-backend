@@ -465,8 +465,250 @@ const getSettlementAccount = async (merchantId) => {
 };
 
 // ============================================
-// Open Banking Functions
+// KYC / Verification Functions
 // ============================================
+
+/**
+ * Verify BVN (Bank Verification Number)
+ * @param {string} bvn - Bank Verification Number
+ * @param {string} firstName - First name for verification
+ * @param {string} lastName - Last name for verification
+ * @param {string} phoneNumber - Phone number for verification
+ * @returns {object} - BVN verification result
+ */
+const verifyBVN = async (bvn, firstName, lastName, phoneNumber) => {
+  try {
+    const payload = {
+      bvn,
+      firstName,
+      lastName,
+      phoneNumber,
+      verificationType: 'full'
+    };
+
+    const result = await makeWemaRequest('POST', 'kyc/bvn/verify', payload);
+
+    if (result.success) {
+      const verification = result.data;
+      return {
+        success: true,
+        verified: verification.verified || verification.status === 'verified',
+        bvn: verification.bvn,
+        firstName: verification.firstName,
+        lastName: verification.lastName,
+        middleName: verification.middleName,
+        phoneNumber: verification.phoneNumber,
+        dateOfBirth: verification.dateOfBirth,
+        gender: verification.gender,
+        address: verification.address,
+        confidence: verification.confidence || 100,
+        message: 'BVN verification successful'
+      };
+    } else {
+      return {
+        success: false,
+        verified: false,
+        error: result.error || result.message
+      };
+    }
+  } catch (err) {
+    logger.error('Wema verifyBVN error:', err.message);
+    return {
+      success: false,
+      verified: false,
+      error: 'BVN verification failed: ' + err.message
+    };
+  }
+};
+
+/**
+ * Verify NIN (National Identity Number)
+ * @param {string} nin - National Identity Number
+ * @param {string} firstName - First name for verification
+ * @param {string} lastName - Last name for verification
+ * @param {string} phoneNumber - Phone number for verification
+ * @returns {object} - NIN verification result
+ */
+const verifyNIN = async (nin, firstName, lastName, phoneNumber) => {
+  try {
+    const payload = {
+      nin,
+      firstName,
+      lastName,
+      phoneNumber,
+      verificationType: 'full'
+    };
+
+    const result = await makeWemaRequest('POST', 'kyc/nin/verify', payload);
+
+    if (result.success) {
+      const verification = result.data;
+      return {
+        success: true,
+        verified: verification.verified || verification.status === 'verified',
+        nin: verification.nin,
+        firstName: verification.firstName,
+        lastName: verification.lastName,
+        middleName: verification.middleName,
+        phoneNumber: verification.phoneNumber,
+        dateOfBirth: verification.dateOfBirth,
+        gender: verification.gender,
+        address: verification.address,
+        confidence: verification.confidence || 100,
+        message: 'NIN verification successful'
+      };
+    } else {
+      return {
+        success: false,
+        verified: false,
+        error: result.error || result.message
+      };
+    }
+  } catch (err) {
+    logger.error('Wema verifyNIN error:', err.message);
+    return {
+      success: false,
+      verified: false,
+      error: 'NIN verification failed: ' + err.message
+    };
+  }
+};
+
+/**
+ * Perform name verification (against bank records)
+ * @param {string} accountNumber - Account number to verify
+ * @param {string} bankCode - Bank code
+ * @param {string} firstName - First name
+ * @param {string} lastName - Last name
+ * @returns {object} - Name verification result
+ */
+const verifyName = async (accountNumber, bankCode, firstName, lastName) => {
+  try {
+    const payload = {
+      accountNumber,
+      bankCode,
+      firstName,
+      lastName,
+      verificationType: 'name_match'
+    };
+
+    const result = await makeWemaRequest('POST', 'kyc/name/verify', payload);
+
+    if (result.success) {
+      const verification = result.data;
+      return {
+        success: true,
+        verified: verification.verified || verification.match,
+        accountNumber: verification.accountNumber,
+        accountName: verification.accountName,
+        bankCode: verification.bankCode,
+        bankName: verification.bankName,
+        confidence: verification.confidence || 100,
+        message: 'Name verification successful'
+      };
+    } else {
+      return {
+        success: false,
+        verified: false,
+        error: result.error || result.message
+      };
+    }
+  } catch (err) {
+    logger.error('Wema verifyName error:', err.message);
+    return {
+      success: false,
+      verified: false,
+      error: 'Name verification failed: ' + err.message
+    };
+  }
+};
+
+/**
+ * Check compliance status and tier limits
+ * @param {string} customerId - Customer ID
+ * @param {number} transactionAmount - Transaction amount in NGN
+ * @param {string} transactionType - Type of transaction
+ * @returns {object} - Compliance check result
+ */
+const checkCompliance = async (customerId, transactionAmount, transactionType) => {
+  try {
+    const payload = {
+      customerId,
+      transactionAmount,
+      transactionType,
+      checkType: 'pre_transaction'
+    };
+
+    const result = await makeWemaRequest('POST', 'compliance/check', payload);
+
+    if (result.success) {
+      const compliance = result.data;
+      return {
+        success: true,
+        approved: compliance.approved || compliance.status === 'approved',
+        tier: compliance.tier || 'standard',
+        dailyLimit: compliance.dailyLimit || 0,
+        monthlyLimit: compliance.monthlyLimit || 0,
+        transactionLimit: compliance.transactionLimit || 0,
+        remainingDaily: compliance.remainingDaily || 0,
+        remainingMonthly: compliance.remainingMonthly || 0,
+        riskScore: compliance.riskScore || 0,
+        flags: compliance.flags || [],
+        message: compliance.message || 'Compliance check completed'
+      };
+    } else {
+      return {
+        success: false,
+        approved: false,
+        error: result.error || result.message
+      };
+    }
+  } catch (err) {
+    logger.error('Wema checkCompliance error:', err.message);
+    return {
+      success: false,
+      approved: false,
+      error: 'Compliance check failed: ' + err.message
+    };
+  }
+};
+
+/**
+ * Get customer tier information and limits
+ * @param {string} customerId - Customer ID
+ * @returns {object} - Tier information
+ */
+const getCustomerTier = async (customerId) => {
+  try {
+    const result = await makeWemaRequest('GET', `customers/${customerId}/tier`);
+
+    if (result.success) {
+      const tier = result.data;
+      return {
+        success: true,
+        tier: tier.tier || 'standard',
+        tierName: tier.tierName || tier.name,
+        dailyLimit: tier.dailyLimit || 0,
+        monthlyLimit: tier.monthlyLimit || 0,
+        transactionLimit: tier.transactionLimit || 0,
+        features: tier.features || [],
+        upgradeRequirements: tier.upgradeRequirements || [],
+        status: tier.status || 'active'
+      };
+    } else {
+      return {
+        success: false,
+        error: result.error || result.message
+      };
+    }
+  } catch (err) {
+    logger.error('Wema getCustomerTier error:', err.message);
+    return {
+      success: false,
+      error: 'Failed to get customer tier: ' + err.message
+    };
+  }
+};
 
 /**
  * Get user's connected bank accounts (Open Banking)
@@ -546,8 +788,148 @@ const initiateAccountLinking = async (customerId) => {
 };
 
 // ============================================
-// Exports
+// Transaction Monitoring Functions
 // ============================================
+
+/**
+ * Perform fraud check on transaction
+ * @param {string} customerId - Customer ID
+ * @param {number} amount - Transaction amount
+ * @param {string} transactionType - Type of transaction
+ * @param {object} metadata - Additional transaction metadata
+ * @returns {object} - Fraud check result
+ */
+const checkFraud = async (customerId, amount, transactionType, metadata = {}) => {
+  try {
+    const payload = {
+      customerId,
+      amount,
+      transactionType,
+      timestamp: new Date().toISOString(),
+      ipAddress: metadata.ipAddress,
+      deviceFingerprint: metadata.deviceFingerprint,
+      location: metadata.location,
+      metadata
+    };
+
+    const result = await makeWemaRequest('POST', 'monitoring/fraud/check', payload);
+
+    if (result.success) {
+      const fraudCheck = result.data;
+      return {
+        success: true,
+        approved: fraudCheck.approved || fraudCheck.status === 'approved',
+        riskScore: fraudCheck.riskScore || 0,
+        riskLevel: fraudCheck.riskLevel || 'low',
+        flags: fraudCheck.flags || [],
+        recommendations: fraudCheck.recommendations || [],
+        message: fraudCheck.message || 'Fraud check completed'
+      };
+    } else {
+      return {
+        success: false,
+        approved: false,
+        error: result.error || result.message
+      };
+    }
+  } catch (err) {
+    logger.error('Wema checkFraud error:', err.message);
+    return {
+      success: false,
+      approved: false,
+      error: 'Fraud check failed: ' + err.message
+    };
+  }
+};
+
+/**
+ * Log transaction for monitoring
+ * @param {string} transactionId - Transaction ID
+ * @param {string} customerId - Customer ID
+ * @param {object} transactionData - Transaction details
+ * @returns {object} - Logging result
+ */
+const logTransaction = async (transactionId, customerId, transactionData) => {
+  try {
+    const payload = {
+      transactionId,
+      customerId,
+      ...transactionData,
+      timestamp: new Date().toISOString(),
+      loggedBy: 'wavvapay_system'
+    };
+
+    const result = await makeWemaRequest('POST', 'monitoring/transactions/log', payload);
+
+    if (result.success) {
+      return {
+        success: true,
+        logId: result.data.logId || result.data.id,
+        message: 'Transaction logged successfully'
+      };
+    } else {
+      return {
+        success: false,
+        error: result.error || result.message
+      };
+    }
+  } catch (err) {
+    logger.error('Wema logTransaction error:', err.message);
+    return {
+      success: false,
+      error: 'Transaction logging failed: ' + err.message
+    };
+  }
+};
+
+/**
+ * Get transaction logs for monitoring
+ * @param {string} customerId - Customer ID
+ * @param {object} filters - Filter options
+ * @returns {object} - Transaction logs
+ */
+const getTransactionLogs = async (customerId, filters = {}) => {
+  try {
+    const queryParams = new URLSearchParams({
+      customerId,
+      ...filters
+    });
+
+    const result = await makeWemaRequest('GET', `monitoring/transactions/logs?${queryParams}`);
+
+    if (result.success) {
+      const logs = Array.isArray(result.data) ? result.data : result.data.logs || [];
+      return {
+        success: true,
+        logs: logs.map(log => ({
+          logId: log.id || log.logId,
+          transactionId: log.transactionId,
+          customerId: log.customerId,
+          amount: log.amount,
+          type: log.type,
+          status: log.status,
+          timestamp: log.timestamp,
+          riskScore: log.riskScore,
+          flags: log.flags || []
+        })),
+        count: logs.length
+      };
+    } else {
+      return {
+        success: false,
+        error: result.error || result.message,
+        logs: []
+      };
+    }
+  } catch (err) {
+    logger.error('Wema getTransactionLogs error:', err.message);
+    return {
+      success: false,
+      error: 'Failed to get transaction logs: ' + err.message,
+      logs: []
+    };
+  }
+};
 
 module.exports = {
   // Virtual account functions
@@ -569,5 +951,17 @@ module.exports = {
   
   // Open banking
   getConnectedBankAccounts,
-  initiateAccountLinking
+  initiateAccountLinking,
+  
+  // KYC / Verification
+  verifyBVN,
+  verifyNIN,
+  verifyName,
+  checkCompliance,
+  getCustomerTier,
+  
+  // Transaction monitoring
+  checkFraud,
+  logTransaction,
+  getTransactionLogs
 };

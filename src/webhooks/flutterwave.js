@@ -7,6 +7,15 @@ const MerchantWallet = require('../models/MerchantWallet');
 const logger = require('../utils/logger');
 const router = express.Router();
 
+// Import real-time notification helper
+let emitTransactionUpdate;
+try {
+  emitTransactionUpdate = require('../controllers/transactionsController').emitTransactionUpdate;
+} catch (err) {
+  logger.warn('Transaction controller not available for real-time notifications');
+  emitTransactionUpdate = () => {}; // No-op function
+}
+
 /**
  * Flutterwave Webhook Handler
  * Handles payment status updates from Flutterwave
@@ -58,6 +67,9 @@ router.post('/flutterwave-payment', async (req, res) => {
         transaction.status = 'completed';
         transaction.paystackTransactionId = data.id;
         await transaction.save();
+
+        // Emit real-time update
+        emitTransactionUpdate(transaction, 'status_changed');
 
         // Update wallet balance based on transaction type
         if (transaction.type === 'wallet_funding') {

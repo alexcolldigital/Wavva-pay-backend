@@ -1,3 +1,4 @@
+// Wema/ALAT Product Routes (moved below, after app is initialized)
 require('dotenv').config();
 const express = require('express');
 const http = require('http');
