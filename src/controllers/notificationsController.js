@@ -164,7 +164,7 @@ const createNotification = async (userId, title, message, type, data = {}) => {
     // Emit real-time notification via WebSocket
     const io = require('../server').io;
     if (io) {
-      io.to(`user_${userId}`).emit('notification', {
+      io.to(`user:${userId}`).emit('notification:new', {
         id: notification._id,
         title: notification.title,
         message: notification.message,

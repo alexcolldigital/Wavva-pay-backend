@@ -20,6 +20,10 @@ const {
   setPin,
   verifyPin,
   changePin,
+  enable2FA,
+  disable2FA,
+  getLinkedDevices,
+  removeLinkedDevice,
 } = require('../controllers/usersController');
 
 const router = express.Router();
@@ -73,5 +77,13 @@ router.get('/pin-status', authMiddleware, getPinStatus);
 router.post('/set-pin', authMiddleware, setPin);
 router.post('/verify-pin', authMiddleware, verifyPin);
 router.post('/change-pin', authMiddleware, changePin);
+
+// 2FA management routes
+router.post('/enable-2fa', authMiddleware, enable2FA);
+router.post('/disable-2fa', authMiddleware, disable2FA);
+
+// Device management routes
+router.get('/linked-devices', authMiddleware, getLinkedDevices);
+router.delete('/linked-devices/:deviceId', authMiddleware, removeLinkedDevice);
 
 module.exports = router;

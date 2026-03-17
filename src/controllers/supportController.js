@@ -26,6 +26,21 @@ const createSupportTicket = async (req, res) => {
 
     await ticket.save();
 
+    // Emit real-time support update
+    const io = require('../server').io;
+    if (io) {
+      io.to(`user:${userId}`).emit('support:update', {
+        type: 'ticket_created',
+        ticket: {
+          id: ticket._id,
+          subject: ticket.subject,
+          category: ticket.category,
+          status: ticket.status,
+          createdAt: ticket.createdAt
+        }
+      });
+    }
+
     res.status(201).json({
       success: true,
       ticket: {

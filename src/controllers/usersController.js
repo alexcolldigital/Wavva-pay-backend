@@ -564,6 +564,88 @@ const changePin = async (req, res) => {
   }
 };
 
+// Enable 2FA
+const enable2FA = async (req, res) => {
+  try {
+    const user = await User.findById(req.userId);
+    if (!user) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+
+    user.twoFactorEnabled = true;
+    await user.save();
+
+    res.json({
+      success: true,
+      message: '2FA enabled successfully'
+    });
+  } catch (err) {
+    console.error('Enable 2FA error:', err);
+    res.status(500).json({ error: 'Failed to enable 2FA' });
+  }
+};
+
+// Disable 2FA
+const disable2FA = async (req, res) => {
+  try {
+    const user = await User.findById(req.userId);
+    if (!user) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+
+    user.twoFactorEnabled = false;
+    await user.save();
+
+    res.json({
+      success: true,
+      message: '2FA disabled successfully'
+    });
+  } catch (err) {
+    console.error('Disable 2FA error:', err);
+    res.status(500).json({ error: 'Failed to disable 2FA' });
+  }
+};
+
+// Get linked devices
+const getLinkedDevices = async (req, res) => {
+  try {
+    // For now, return mock data. In a real implementation, you'd have a Device model
+    const devices = [
+      {
+        id: '1',
+        name: 'iPhone 14 Pro',
+        type: 'mobile',
+        lastActive: new Date().toISOString(),
+        currentDevice: true
+      }
+    ];
+
+    res.json({
+      success: true,
+      devices
+    });
+  } catch (err) {
+    console.error('Get linked devices error:', err);
+    res.status(500).json({ error: 'Failed to fetch linked devices' });
+  }
+};
+
+// Remove linked device
+const removeLinkedDevice = async (req, res) => {
+  try {
+    const { deviceId } = req.params;
+
+    // For now, just return success. In a real implementation, you'd remove from database
+    res.json({
+      success: true,
+      message: 'Device removed successfully'
+    });
+  } catch (err) {
+    console.error('Remove linked device error:', err);
+    res.status(500).json({ error: 'Failed to remove device' });
+  }
+};
+
 module.exports = {
   getProfile,
   updateProfile,
@@ -583,4 +665,8 @@ module.exports = {
   setPin,
   verifyPin,
   changePin,
+  enable2FA,
+  disable2FA,
+  getLinkedDevices,
+  removeLinkedDevice,
 };

@@ -135,6 +135,20 @@ const useReferralCode = async (req, res) => {
 
     await referral.save();
 
+    // Emit real-time referral update to referrer
+    const io = require('../server').io;
+    if (io) {
+      io.to(`user:${referrer._id}`).emit('referral:update', {
+        type: 'new_referral',
+        referral: {
+          id: referral._id,
+          referredUserId: newUserId,
+          status: referral.status,
+          createdAt: referral.createdAt
+        }
+      });
+    }
+
     res.json({
       success: true,
       message: 'Referral code applied successfully',
