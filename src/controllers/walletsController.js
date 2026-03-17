@@ -1,6 +1,7 @@
 const User = require('../models/User');
 const Wallet = require('../models/Wallet');
 const Transaction = require('../models/Transaction');
+const walletService = require('../services/walletService');
 
 // Get wallet analytics
 const getAnalytics = async (req, res) => {
@@ -63,16 +64,28 @@ const getAnalytics = async (req, res) => {
 const getWallets = async (req, res) => {
   try {
     const user = await User.findById(req.userId).populate('walletId');
-    
+
     if (!user?.walletId) {
       return res.status(404).json({ success: false, error: 'Wallet not found' });
     }
 
     const wallet = user.walletId;
-    
+
+    // Ensure virtual account exists for user
+    try {
+      if (!wallet.virtualAccountNumber) {
+        await walletService.createVirtualAccountForUser(req.userId);
+        // Re-fetch wallet after virtual account creation
+        await wallet.reload();
+      }
+    } catch (virtualAccountError) {
+      console.warn('Failed to create virtual account:', virtualAccountError.message);
+      // Continue without virtual account for now
+    }
+
     // Get or create NGN wallet
     const nairaWallet = wallet.getOrCreateWallet('NGN');
-    
+
     // IMPORTANT: Mark wallets array as modified in case new wallets were created
     wallet.markModified('wallets');
     await wallet.save();
@@ -91,6 +104,16 @@ const getWallets = async (req, res) => {
       isActive: w.isActive,
       isDefault: w.purpose === 'general' && w.currency === 'NGN',
       createdAt: w.createdAt,
+      // Include virtual account details for the default wallet
+      ...(w.purpose === 'general' && w.currency === 'NGN' && wallet.virtualAccountNumber ? {
+        virtualAccount: {
+          accountNumber: wallet.virtualAccountNumber,
+          accountName: wallet.virtualAccountName,
+          bankName: wallet.virtualAccountBank,
+          reference: wallet.virtualAccountReference,
+          status: wallet.virtualAccountStatus
+        }
+      } : {})
     }));
 
     res.json({

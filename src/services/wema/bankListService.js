@@ -32,6 +32,19 @@ const NIGERIAN_BANKS = [
 module.exports = {
   async getBankList() {
     try {
+      // Check if Wema API is properly configured
+      const isApiConfigured = process.env.WEMA_SUBSCRIPTION_KEY &&
+                             process.env.WEMA_SUBSCRIPTION_KEY !== 'your-wema-subscription-key';
+
+      if (!isApiConfigured) {
+        // Return static list for development/testing
+        logger.warn('Wema API not configured, returning static bank list');
+        return {
+          success: true,
+          data: NIGERIAN_BANKS
+        };
+      }
+
       // Try to get bank list from Wema API
       const response = await wemaApiClient.get('/fundstransferopenapi/v1/banks');
 

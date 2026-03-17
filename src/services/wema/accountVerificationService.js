@@ -7,6 +7,39 @@ const logger = require('../../utils/logger');
 module.exports = {
   async verifyAccountNumber(accountNumber, bankCode) {
     try {
+      // Check if Wema API is properly configured
+      const isApiConfigured = process.env.WEMA_SUBSCRIPTION_KEY &&
+                             process.env.WEMA_SUBSCRIPTION_KEY !== 'your-wema-subscription-key' &&
+                             process.env.WEMA_API_KEY &&
+                             process.env.WEMA_API_KEY !== 'your_wema_api_key_here';
+
+      if (!isApiConfigured) {
+        // Return mock data for development/testing
+        logger.warn('Wema API not configured, returning mock account verification data');
+
+        // Simple mock logic based on account number
+        const mockNames = [
+          'John Doe',
+          'Jane Smith',
+          'Michael Johnson',
+          'Sarah Williams',
+          'David Brown'
+        ];
+
+        // Use last digit of account number to select a mock name
+        const nameIndex = parseInt(accountNumber.slice(-1)) % mockNames.length;
+        const mockAccountName = mockNames[nameIndex];
+
+        return {
+          success: true,
+          data: {
+            accountName: mockAccountName,
+            accountNumber: accountNumber,
+            bankCode: bankCode
+          }
+        };
+      }
+
       // For account verification, we can use the Funds Transfer API's name enquiry
       // or the Customer Identification Service depending on the bank
 

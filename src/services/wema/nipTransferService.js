@@ -17,6 +17,12 @@ module.exports = {
         pin
       } = transferData;
 
+      // Check if Wema API is properly configured
+      const isApiConfigured = process.env.WEMA_SUBSCRIPTION_KEY &&
+                             process.env.WEMA_SUBSCRIPTION_KEY !== 'your-wema-subscription-key' &&
+                             process.env.WEMA_API_KEY &&
+                             process.env.WEMA_API_KEY !== 'your_wema_api_key_here';
+
       // Validate user wallet balance
       const wallet = await Wallet.findOne({ userId });
       if (!wallet || wallet.balance < amount) {
@@ -28,6 +34,40 @@ module.exports = {
       // if (!isValidPin) {
       //   throw new Error('Invalid PIN');
       // }
+
+      if (!isApiConfigured) {
+        // Mock transfer for development/testing
+        logger.warn('Wema API not configured, simulating transfer');
+
+        // Debit wallet
+        wallet.balance -= parseFloat(amount);
+        await wallet.save();
+
+        // Log transaction
+        const transaction = new Transaction({
+          userId,
+          type: 'debit',
+          amount: parseFloat(amount),
+          description: `Transfer to ${account_number}`,
+          reference: `MOCK_${Date.now()}_${userId}`,
+          status: 'completed',
+          metadata: {
+            recipientAccount: account_number,
+            recipientBank: bank_code,
+            mockTransfer: true
+          }
+        });
+        await transaction.save();
+
+        return {
+          success: true,
+          data: {
+            transactionId: transaction._id,
+            reference: transaction.reference,
+            mockTransfer: true
+          }
+        };
+      }
 
       // Prepare transfer payload for Wema Funds Transfer API
       const payload = {

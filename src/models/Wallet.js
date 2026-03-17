@@ -44,6 +44,18 @@ const walletSchema = new mongoose.Schema({
   chimoneySubAccountId: String,
   chimoneyUsdAccountId: String, // For USD transactions
   
+  // Wema Virtual Account Integration
+  virtualAccountNumber: String,
+  virtualAccountName: String,
+  virtualAccountBank: { type: String, default: 'Wema Bank' },
+  virtualAccountReference: String,
+  wemaVirtualAccountId: String, // Wema's internal ID
+  virtualAccountStatus: { type: String, enum: ['active', 'inactive', 'suspended'], default: 'active' },
+  
+  // Flutterwave Integration
+  flutterwaveSubAccountId: String,
+  flutterwaveAccountReference: String,
+  
   createdAt: { type: Date, default: Date.now },
   updatedAt: { type: Date, default: Date.now },
 }, { timestamps: true });
