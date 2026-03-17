@@ -109,6 +109,43 @@ const createPaymentRequest = async (req, res) => {
       }
     }
 
+    // Emit real-time event to all participants
+    const eventData = {
+      requestId: paymentRequest._id,
+      title: paymentRequest.title,
+      description: paymentRequest.description,
+      totalAmount: paymentRequest.totalAmount / 100,
+      currency: paymentRequest.currency,
+      splitType: paymentRequest.splitType,
+      dueDate: paymentRequest.dueDate,
+      expireDate: paymentRequest.expireDate,
+      createdBy: {
+        userId: paymentRequest.requestedBy._id,
+        firstName: paymentRequest.requestedBy.firstName,
+        lastName: paymentRequest.requestedBy.lastName,
+        profilePicture: paymentRequest.requestedBy.profilePicture
+      },
+      participants: paymentRequest.participants.map(p => ({
+        userId: p.userId._id,
+        firstName: p.userId.firstName,
+        lastName: p.userId.lastName,
+        email: p.userId.email,
+        dueAmount: p.dueAmount / 100,
+        sharePercentage: p.sharePercentage,
+        status: p.status
+      })),
+      items: paymentRequest.items,
+      status: paymentRequest.status
+    };
+
+    // Emit to each participant's personal room
+    for (const participant of paymentRequest.participants) {
+      req.io.to(`user:${participant.userId._id}`).emit('split_bill_created', eventData);
+    }
+
+    // Also emit to creator's split bills room
+    req.io.to(`user_split_bills:${userId}`).emit('split_bill_created', eventData);
+
     res.status(201).json({
       success: true,
       message: 'Payment request created successfully',
@@ -228,6 +265,47 @@ const respondToPaymentRequest = async (req, res) => {
 
     await request.save();
 
+    // Populate participant data for real-time event
+    await request.populate('participants.userId', 'firstName lastName email');
+
+    // Emit real-time event for response
+    const responseEventData = {
+      requestId: request._id,
+      title: request.title,
+      participant: {
+        userId: participant.userId._id,
+        firstName: participant.userId.firstName,
+        lastName: participant.userId.lastName,
+        email: participant.userId.email,
+        status: participant.status,
+        dueAmount: participant.dueAmount / 100,
+        action: action,
+        respondedAt: new Date(),
+        declineReason: participant.declineReason
+      },
+      totalAccepted: request.participants.filter(p => p.status === 'accepted').length,
+      totalDeclined: request.participants.filter(p => p.status === 'declined').length,
+      totalPending: request.participants.filter(p => p.status === 'pending').length,
+      status: request.status
+    };
+
+    // Emit to the bill creator's room
+    req.io.to(`user_split_bills:${request.requestedBy}`).emit('participant_response', responseEventData);
+
+    // Emit to all participants' rooms for live updates
+    for (const p of request.participants) {
+      req.io.to(`user_split_bills:${p.userId}`).emit('split_bill_updated', {
+        requestId: request._id,
+        title: request.title,
+        status: request.status,
+        participantResponses: {
+          accepted: request.participants.filter(p => p.status === 'accepted').length,
+          declined: request.participants.filter(p => p.status === 'declined').length,
+          pending: request.participants.filter(p => p.status === 'pending').length
+        }
+      });
+    }
+
     res.json({
       success: true,
       message: `Payment request ${action}ed successfully`,
@@ -340,6 +418,56 @@ const recordPayment = async (req, res) => {
         feePercentage,
         grossAmount: amountInCents,
         description: `Payment request commission: ${request.title}`
+      });
+    }
+
+    // Emit real-time event for payment received
+    const paymentEventData = {
+      requestId: request._id,
+      title: request.title,
+      payment: {
+        amount: amountInCents / 100,
+        currency: request.currency,
+        paidBy: {
+          userId: userId,
+          // Will be populated by frontend or additional query if needed
+        },
+        paidTo: {
+          userId: request.requestedBy._id,
+          firstName: request.requestedBy.firstName,
+          lastName: request.requestedBy.lastName,
+          profilePicture: request.requestedBy.profilePicture
+        },
+        transactionId: transaction._id,
+        paymentDate: new Date(),
+        remainingDue: participant.dueAmount / 100
+      },
+      totalPaid: request.totalPaid / 100,
+      totalAmount: request.totalAmount / 100,
+      status: request.status,
+      progressPercentage: (request.totalPaid / request.totalAmount) * 100
+    };
+
+    // Emit to the bill creator's room
+    req.io.to(`user_split_bills:${request.requestedBy}`).emit('payment_received', paymentEventData);
+
+    // Emit to the payer's room for confirmation
+    req.io.to(`user_split_bills:${userId}`).emit('payment_made', paymentEventData);
+
+    // Emit to all participants' rooms for live updates
+    for (const p of request.participants) {
+      req.io.to(`user_split_bills:${p.userId}`).emit('split_bill_updated', {
+        requestId: request._id,
+        title: request.title,
+        status: request.status,
+        totalPaid: request.totalPaid / 100,
+        progressPercentage: (request.totalPaid / request.totalAmount) * 100,
+        updatedParticipant: {
+          userId: p.userId._id,
+          dueAmount: p.dueAmount / 100,
+          paidAmount: p.paidAmount / 100,
+          status: p.status
+        }
       });
     }
 
@@ -463,6 +591,32 @@ const cancelPaymentRequest = async (req, res) => {
     request.cancelReason = reason;
 
     await request.save();
+
+    // Populate participant data for real-time event
+    await request.populate('participants.userId', 'firstName lastName email');
+
+    // Emit real-time event for cancellation
+    const cancelEventData = {
+      requestId: request._id,
+      title: request.title,
+      cancelledBy: {
+        userId: request.requestedBy._id,
+        firstName: request.requestedBy.firstName,
+        lastName: request.requestedBy.lastName,
+        profilePicture: request.requestedBy.profilePicture
+      },
+      cancelledAt: request.cancelledAt,
+      cancelReason: request.cancelReason,
+      status: request.status
+    };
+
+    // Emit to all participants' rooms
+    for (const participant of request.participants) {
+      req.io.to(`user_split_bills:${participant.userId}`).emit('split_bill_cancelled', cancelEventData);
+    }
+
+    // Also emit to creator's room
+    req.io.to(`user_split_bills:${request.requestedBy}`).emit('split_bill_cancelled', cancelEventData);
 
     res.json({
       success: true,

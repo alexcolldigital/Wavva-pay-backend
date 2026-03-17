@@ -66,6 +66,7 @@ router.post('/flutterwave-payment', async (req, res) => {
         // Update transaction status
         transaction.status = 'completed';
         transaction.paystackTransactionId = data.id;
+        transaction.metadata = { ...transaction.metadata, webhookData: data };
         await transaction.save();
 
         // Emit real-time update
@@ -95,6 +96,7 @@ router.post('/flutterwave-payment', async (req, res) => {
         // Payment failed
         transaction.status = 'failed';
         transaction.failureReason = data.processor_response || 'Payment failed';
+        transaction.metadata = { ...transaction.metadata, webhookData: data };
         await transaction.save();
 
         // Refund wallet if wallet funding failed
@@ -116,15 +118,84 @@ router.post('/flutterwave-payment', async (req, res) => {
 
       if (transaction) {
         transaction.status = data.status === 'successful' ? 'completed' : 'failed';
+        transaction.metadata = { ...transaction.metadata, webhookData: data };
         await transaction.save();
+
+        // Emit real-time update
+        emitTransactionUpdate(transaction, 'status_changed');
+
         logger.info(`Bank transfer ${transaction._id} updated: ${transaction.status}`);
       }
+    } else if (event.event === 'bill.created' || event.event === 'bill.completed') {
+      // Bill payment events
+      const transaction = await Transaction.findOne({
+        paystackReference: data.tx_ref
+      });
+
+      if (transaction) {
+        if (event.event === 'bill.completed' && data.status === 'successful') {
+          transaction.status = 'completed';
+        } else if (data.status === 'failed') {
+          transaction.status = 'failed';
+          transaction.failureReason = data.failure_reason || 'Bill payment failed';
+        }
+        transaction.metadata = { ...transaction.metadata, webhookData: data };
+        await transaction.save();
+
+        // Emit real-time update
+        emitTransactionUpdate(transaction, 'status_changed');
+
+        logger.info(`Bill payment ${transaction._id} updated: ${transaction.status}`);
+      }
+    } else if (event.event === 'subscription.created' || event.event === 'subscription.cancelled') {
+      // Subscription events
+      logger.info(`Subscription ${event.event}: ${data.id}`);
+      // Handle subscription events as needed
     }
 
     // Always return 200 to acknowledge webhook receipt
     res.json({ success: true });
   } catch (err) {
     logger.error('Flutterwave webhook error:', err);
+    // Still return 200 to prevent webhook retry
+    res.status(200).json({ success: true, error: err.message });
+  }
+});
+
+// Handle Flutterwave general webhook events
+router.post('/flutterwave-events', async (req, res) => {
+  try {
+    // Skip signature verification in development if secret not set
+    const skipVerification = !process.env.FLUTTERWAVE_SECRET_KEY;
+
+    if (!skipVerification && !verifyFlutterwaveWebhook(req)) {
+      logger.warn('Invalid Flutterwave webhook signature');
+      return res.status(401).json({ error: 'Invalid signature' });
+    }
+
+    const event = req.body;
+    const data = event.data;
+
+    logger.info(`Flutterwave general webhook received: ${event.event}`, {
+      transactionId: data?.id,
+      reference: data?.tx_ref,
+      status: data?.status
+    });
+
+    // Use the enhanced webhook processor from the service
+    const flutterwaveService = require('../services/flutterwave');
+    const result = await flutterwaveService.processWebhookEvent(event);
+
+    if (result.success) {
+      logger.info(`✅ Flutterwave webhook processed: ${event.event}`);
+    } else {
+      logger.warn(`❌ Flutterwave webhook processing failed: ${result.error}`);
+    }
+
+    // Always return 200 to acknowledge webhook receipt
+    res.json({ success: true });
+  } catch (err) {
+    logger.error('Flutterwave general webhook error:', err);
     // Still return 200 to prevent webhook retry
     res.status(200).json({ success: true, error: err.message });
   }

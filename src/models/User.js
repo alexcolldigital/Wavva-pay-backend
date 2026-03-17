@@ -61,12 +61,20 @@ const userSchema = new mongoose.Schema({
   // Friends list
   friends: [{ type: mongoose.Schema.Types.ObjectId, ref: 'User' }],
   
+  // Referral system
+  referralCode: { type: String, unique: true, sparse: true },
+  
   // Preferences
   preferredCurrency: { type: String, enum: ['USD', 'NGN'], default: 'NGN' },
   notificationPreferences: {
-    emailNotifications: { type: Boolean, default: true },
-    smsNotifications: { type: Boolean, default: true },
-    pushNotifications: { type: Boolean, default: true },
+    push: { type: Boolean, default: true },
+    email: { type: Boolean, default: true },
+    sms: { type: Boolean, default: true },
+    paymentReceived: { type: Boolean, default: true },
+    paymentSent: { type: Boolean, default: true },
+    groupPayments: { type: Boolean, default: true },
+    security: { type: Boolean, default: true },
+    promotions: { type: Boolean, default: false }
   },
   
   // Security - 4-digit PIN for transactions

@@ -80,6 +80,9 @@ app.use('/api/transactions', require('./routes/transactions'));
 app.use('/api/combines', require('./routes/combines'));
 app.use('/api/payment-requests', require('./routes/paymentRequests'));
 app.use('/api/payments', require('./routes/payments'));
+app.use('/api/notifications', require('./routes/notifications'));
+app.use('/api/referrals', require('./routes/referrals'));
+app.use('/api/support', require('./routes/support'));
 app.use('/api/voice', require('./routes/voice'));
 app.use('/api/banking', require('./routes/banking'));
 app.use('/api/admin', require('./routes/admin'));
@@ -95,6 +98,12 @@ app.use('/api/wema/account-verification', require('./routes/wema/accountVerifica
 app.use('/api/wema/bank-list', require('./routes/wema/bankListRoutes'));
 app.use('/api/wema/settlement', require('./routes/wema/settlementRoutes'));
 app.use('/api/wema/customer-identification', require('./routes/wema/customerIdentificationRoutes'));
+
+// Flutterwave Routes
+app.use('/api/flutterwave', require('./routes/flutterwave'));
+
+// Group Payment Routes
+app.use('/api/group-payments', require('./routes/groupPayments'));
 
 // Merchant Routes
 app.use('/api/merchant', require('./routes/merchant'));

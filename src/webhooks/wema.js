@@ -23,22 +23,32 @@ try {
 
 // Verify Wema webhook signature
 function verifyWemaWebhook(req) {
-  const signature = req.headers['x-wema-signature'];
-  if (!signature) return false;
+  const signature = req.headers['x-wema-signature'] || req.headers['x-alat-signature'];
+  if (!signature) {
+    logger.warn('No webhook signature provided');
+    return false;
+  }
 
   const hash = crypto
-    .createHmac('sha256', process.env.WEMA_SECRET_KEY)
+    .createHmac('sha256', process.env.WEMA_SECRET_KEY || process.env.WEMA_API_SECRET)
     .update(JSON.stringify(req.body))
     .digest('hex');
 
-  return hash === signature;
+  const isValid = hash === signature;
+  if (!isValid) {
+    logger.warn('Invalid webhook signature', { expected: hash, received: signature });
+  }
+
+  return isValid;
 }
 
 // Handle Wema Webhook - Virtual Account Credit
 router.post('/wema-account-credit', async (req, res) => {
   try {
-    // Verify webhook signature
-    if (!verifyWemaWebhook(req)) {
+    // Skip signature verification in development if credentials not set
+    const skipVerification = !process.env.WEMA_SECRET_KEY && !process.env.WEMA_API_SECRET;
+
+    if (!skipVerification && !verifyWemaWebhook(req)) {
       logger.warn('Invalid Wema webhook signature');
       return res.status(401).json({ error: 'Invalid signature' });
     }
@@ -46,15 +56,19 @@ router.post('/wema-account-credit', async (req, res) => {
     const webhook = req.body;
 
     logger.info(`Wema webhook received: ${webhook.event}`, {
-      accountNumber: webhook.account_number,
+      accountNumber: webhook.accountNumber || webhook.account_number,
       amount: webhook.amount,
       reference: webhook.reference
     });
 
     // Handle different event types
-    if (webhook.event === 'account.credit') {
+    if (webhook.event === 'account.credit' || webhook.event === 'CREDIT') {
       // Virtual account credited
-      const { accountNumber, amount, reference, senderName, senderAccountNumber } = webhook;
+      const accountNumber = webhook.accountNumber || webhook.account_number;
+      const amount = webhook.amount;
+      const reference = webhook.reference;
+      const senderName = webhook.senderName || webhook.sender_name || 'Unknown Sender';
+      const senderAccountNumber = webhook.senderAccountNumber || webhook.sender_account_number || 'Unknown';
 
       // Find user by virtual account number
       const user = await User.findOne({
@@ -87,19 +101,21 @@ router.post('/wema-account-credit', async (req, res) => {
           metadata: {
             senderName,
             senderAccountNumber,
-            senderBank: webhook.senderBank || 'Unknown'
+            senderBank: webhook.senderBank || webhook.sender_bank || 'Unknown',
+            webhookData: webhook
           }
         });
 
         await transaction.save();
-        
+
         // Emit real-time update
         emitTransactionUpdate(transaction, 'status_changed');
       } else {
         // Update existing transaction
         transaction.status = 'completed';
+        transaction.metadata = { ...transaction.metadata, webhookData: webhook };
         await transaction.save();
-        
+
         // Emit real-time update
         emitTransactionUpdate(transaction, 'status_changed');
       }
@@ -113,11 +129,13 @@ router.post('/wema-account-credit', async (req, res) => {
         wallet.markModified('wallets');
         await wallet.save();
 
-        logger.info(`✅ Virtual account credit: ${user._id} | Amount: ${amount} | New balance: ${currencyWallet.balance / 100}`);
+        logger.info(`✅ Virtual account credit: ${user._id} | Amount: ₦${amount} | New balance: ₦${currencyWallet.balance / 100}`);
       }
-    } else if (webhook.event === 'account.debit') {
+    } else if (webhook.event === 'account.debit' || webhook.event === 'DEBIT') {
       // Virtual account debited (outgoing transfer)
-      const { accountNumber, amount, reference } = webhook;
+      const accountNumber = webhook.accountNumber || webhook.account_number;
+      const amount = webhook.amount;
+      const reference = webhook.reference;
 
       const transaction = await Transaction.findOne({
         paystackReference: reference
@@ -125,7 +143,12 @@ router.post('/wema-account-credit', async (req, res) => {
 
       if (transaction) {
         transaction.status = 'completed';
+        transaction.metadata = { ...transaction.metadata, webhookData: webhook };
         await transaction.save();
+
+        // Emit real-time update
+        emitTransactionUpdate(transaction, 'status_changed');
+
         logger.info(`Virtual account debit transaction ${transaction._id} marked as completed`);
       }
     }
@@ -139,58 +162,112 @@ router.post('/wema-account-credit', async (req, res) => {
   }
 });
 
-// Handle Wema Webhook - Transfer Status Update
-router.post('/wema-transfer-status', async (req, res) => {
+// Handle Wema Webhook - General Events
+router.post('/wema-events', async (req, res) => {
   try {
-    if (!verifyWemaWebhook(req)) {
+    // Skip signature verification in development if credentials not set
+    const skipVerification = !process.env.WEMA_SECRET_KEY && !process.env.WEMA_API_SECRET;
+
+    if (!skipVerification && !verifyWemaWebhook(req)) {
       logger.warn('Invalid Wema webhook signature');
       return res.status(401).json({ error: 'Invalid signature' });
     }
 
     const webhook = req.body;
 
-    logger.info(`Wema transfer webhook: ${webhook.status}`, {
+    logger.info(`Wema general webhook received: ${webhook.event}`, {
+      data: webhook
+    });
+
+    // Process webhook using the service
+    const virtualAccountService = require('../services/wema/virtualAccountService');
+
+    if (webhook.event === 'account.credit' || webhook.event === 'CREDIT' ||
+        webhook.event === 'account.debit' || webhook.event === 'DEBIT') {
+      // Handle virtual account transactions
+      const result = await virtualAccountService.handleVirtualAccountWebhook({
+        accountNumber: webhook.accountNumber || webhook.account_number,
+        amount: webhook.amount,
+        transactionReference: webhook.reference,
+        transactionType: webhook.event === 'account.credit' || webhook.event === 'CREDIT' ? 'CREDIT' : 'DEBIT',
+        narration: webhook.narration || webhook.description || 'Virtual Account Transaction',
+        senderName: webhook.senderName || webhook.sender_name,
+        senderAccountNumber: webhook.senderAccountNumber || webhook.sender_account_number,
+        senderBank: webhook.senderBank || webhook.sender_bank
+      });
+
+      if (result.success) {
+        logger.info(`✅ Virtual account webhook processed: ${webhook.reference}`);
+      } else {
+        logger.warn(`❌ Virtual account webhook processing failed: ${result.message}`);
+      }
+    } else {
+      logger.info(`Unhandled Wema webhook event: ${webhook.event}`);
+    }
+
+    // Always return 200 to acknowledge webhook receipt
+    res.json({ success: true });
+  } catch (err) {
+    logger.error('Wema general webhook error:', err);
+    // Still return 200 to prevent webhook retry
+    res.status(200).json({ success: true, error: err.message });
+  }
+});
+
+// Handle Wema Webhook - NIP Transfer Events
+router.post('/wema-nip-transfer', async (req, res) => {
+  try {
+    // Skip signature verification in development if credentials not set
+    const skipVerification = !process.env.WEMA_SECRET_KEY && !process.env.WEMA_API_SECRET;
+
+    if (!skipVerification && !verifyWemaWebhook(req)) {
+      logger.warn('Invalid Wema webhook signature');
+      return res.status(401).json({ error: 'Invalid signature' });
+    }
+
+    const webhook = req.body;
+
+    logger.info(`Wema NIP transfer webhook received: ${webhook.event}`, {
       transferId: webhook.transferId,
+      status: webhook.status,
       reference: webhook.reference
     });
 
-    // Find transaction by transfer ID
-    const transaction = await Transaction.findOne({
-      paystackTransactionId: webhook.transferId
-    });
+    // Handle NIP transfer status updates
+    if (webhook.event === 'transfer.completed' || webhook.event === 'transfer.failed') {
+      const transaction = await Transaction.findOne({
+        paystackReference: webhook.reference
+      });
 
-    if (transaction) {
-      transaction.status = webhook.status === 'successful' ? 'completed' : 'failed';
-      if (webhook.status === 'failed') {
-        transaction.failureReason = webhook.failureReason || 'Transfer failed';
-      }
-      await transaction.save();
-
-      logger.info(`Transfer ${transaction._id} updated: ${transaction.status}`);
-
-      // If transfer failed, refund the wallet
-      if (webhook.status === 'failed' && transaction.type === 'payout') {
-        const wallet = await Wallet.findById(transaction.sender);
-        if (wallet) {
-          const totalDebit = transaction.amount + transaction.feeAmount;
-          wallet.balance += totalDebit;
-          await wallet.save();
-          logger.info(`Refunded ${totalDebit / 100} to wallet due to failed transfer`);
+      if (transaction) {
+        transaction.status = webhook.event === 'transfer.completed' ? 'completed' : 'failed';
+        if (webhook.event === 'transfer.failed') {
+          transaction.failureReason = webhook.failureReason || 'Transfer failed';
         }
+        transaction.metadata = { ...transaction.metadata, webhookData: webhook };
+        await transaction.save();
+
+        // Emit real-time update
+        emitTransactionUpdate(transaction, 'status_changed');
+
+        logger.info(`NIP transfer ${transaction._id} updated: ${transaction.status}`);
       }
     }
 
     res.json({ success: true });
   } catch (err) {
-    logger.error('Wema transfer webhook error:', err);
+    logger.error('Wema NIP transfer webhook error:', err);
     res.status(200).json({ success: true, error: err.message });
   }
 });
 
-// Handle Wema Webhook - Settlement Update
+// Handle Wema Webhook - Settlement Events
 router.post('/wema-settlement', async (req, res) => {
   try {
-    if (!verifyWemaWebhook(req)) {
+    // Skip signature verification in development if credentials not set
+    const skipVerification = !process.env.WEMA_SECRET_KEY && !process.env.WEMA_API_SECRET;
+
+    if (!skipVerification && !verifyWemaWebhook(req)) {
       logger.warn('Invalid Wema webhook signature');
       return res.status(401).json({ error: 'Invalid signature' });
     }
