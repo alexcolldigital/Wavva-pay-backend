@@ -88,6 +88,14 @@ app.use('/api/admin', require('./routes/admin'));
 app.use('/api/kyc/user', require('./routes/userKYC'));
 app.use('/api/kyc/merchant', require('./routes/kyc'));
 
+// Wema/ALAT Product Routes
+app.use('/api/wema/virtual-account', require('./routes/wema/virtualAccountRoutes'));
+app.use('/api/wema/nip-transfer', require('./routes/wema/nipTransferRoutes'));
+app.use('/api/wema/account-verification', require('./routes/wema/accountVerificationRoutes'));
+app.use('/api/wema/bank-list', require('./routes/wema/bankListRoutes'));
+app.use('/api/wema/settlement', require('./routes/wema/settlementRoutes'));
+app.use('/api/wema/customer-identification', require('./routes/wema/customerIdentificationRoutes'));
+
 // Merchant Routes
 app.use('/api/merchant', require('./routes/merchant'));
 app.use('/api/merchant/payment-links', require('./routes/paymentLink'));
