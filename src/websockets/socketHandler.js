@@ -114,7 +114,10 @@ function setupSocketHandlers(io) {
         if (!userRoomMap.has(connectUserId)) {
           userRoomMap.set(connectUserId, new Set());
         }
-        userRoomMap.get(connectUserId)!.add(userRoom);
+        const userRooms = userRoomMap.get(connectUserId);
+        if (userRooms) {
+          userRooms.add(userRoom);
+        }
 
         socket.emit('connected', {
           message: 'Connected to real-time updates',
