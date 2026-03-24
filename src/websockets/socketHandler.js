@@ -1,3 +1,40 @@
+/**
+ * ====================================================================
+ * WebSocket Socket.IO Handler - Comprehensive Real-time System
+ * ====================================================================
+ * 
+ * This file handles all WebSocket connections and real-time events for:
+ * - Mobile App Users (real-time updates, wallet, transactions, KYC)
+ * - Admin Dashboard (stats, user management, fraud detection)
+ * - NFC Transactions and Processing
+ * - Split Bills and Group Payments
+ * - Group Chat and Support Communication
+ * 
+ * MERGED HANDLERS (Fixed from original dual-file structure):
+ * ✓ User Real-time Handlers (from socketHandler-realtime.js)
+ * ✓ Admin Handlers (from socketHandler.js)
+ * ✓ Split Bills & Group Payments Handlers
+ * ✓ NFC Transaction Handlers
+ * 
+ * KEY EVENTS:
+ * Mobile App:
+ *   - user:connect           → authenticate user and start receiving updates
+ *   - wallet:request-balance → get current wallet balance
+ *   - transactions:request-history → fetch transaction history
+ *   - transfer:poll-status   → check transfer/transaction status
+ *   - kyc:request-status     → get KYC verification status
+ * 
+ * Admin:
+ *   - admin:subscribe        → subscribe to dashboard stats
+ *   - fraud:simulate-alert   → simulate fraud detection alert
+ * 
+ * NFC:
+ *   - nfc:start-reading / nfc:stop-reading
+ *   - nfc:process-transaction
+ * 
+ * ====================================================================
+ */
+
 const jwt = require('jsonwebtoken');
 const User = require('../models/User');
 const logger = require('../utils/logger');
@@ -9,22 +46,27 @@ const logger = require('../utils/logger');
 function setupSocketHandlers(io) {
   // Map to track user connections
   const userConnections = new Map();
+  const userRoomMap = new Map(); // Track user -> socket rooms mapping
   
-  // Middleware to verify token
+  // Middleware to verify token (optional - allow anonymous connections too)
   io.use((socket, next) => {
     const token = socket.handshake.auth.token || socket.handshake.query.token;
     
-    if (!token) {
-      return next(new Error('Authentication required'));
-    }
-
-    try {
-      const decoded = jwt.verify(token, process.env.JWT_SECRET || 'secret');
-      socket.userId = decoded.userId;
-      socket.userRole = decoded.role || 'user';
+    if (token) {
+      try {
+        const decoded = jwt.verify(token, process.env.JWT_SECRET || 'secret');
+        socket.userId = decoded.userId;
+        socket.userRole = decoded.role || 'user';
+        next();
+      } catch (error) {
+        logger.warn('Invalid token:', error.message);
+        next(new Error('Invalid token'));
+      }
+    } else {
+      // Allow connection without token (for specific events that don't need auth)
+      socket.userId = null;
+      socket.userRole = 'guest';
       next();
-    } catch (error) {
-      next(new Error('Invalid token'));
     }
   });
 
@@ -33,10 +75,197 @@ function setupSocketHandlers(io) {
     const userRole = socket.userRole;
 
     logger.info(`User connected: ${userId}`, { socketId: socket.id });
-    userConnections.set(userId, socket.id);
+    if (userId) {
+      userConnections.set(userId, socket.id);
+      if (!userRoomMap.has(userId)) {
+        userRoomMap.set(userId, new Set());
+      }
+    }
 
     /**
-     * Admin Dashboard - Real-time Stats
+     * ========================================
+     * MOBILE APP - USER REAL-TIME HANDLERS
+     * ========================================
+     */
+
+    /**
+     * User Authentication and Connection
+     */
+    socket.on('user:connect', async (data) => {
+      const { userId: connectUserId, token } = data;
+      
+      if (!connectUserId || !token) {
+        socket.emit('error', { message: 'Authentication required' });
+        return;
+      }
+
+      try {
+        // Verify token
+        const decoded = jwt.verify(token, process.env.JWT_SECRET || 'secret');
+        
+        // Update socket with user info
+        socket.userId = connectUserId;
+        
+        // Register user connection
+        socket.join(`user:${connectUserId}`);
+        userConnections.set(connectUserId, socket.id);
+        
+        const userRoom = `user:${connectUserId}`;
+        if (!userRoomMap.has(connectUserId)) {
+          userRoomMap.set(connectUserId, new Set());
+        }
+        userRoomMap.get(connectUserId)!.add(userRoom);
+
+        socket.emit('connected', {
+          message: 'Connected to real-time updates',
+          userId: connectUserId,
+          timestamp: new Date()
+        });
+
+        logger.info(`User ${connectUserId} authenticated on socket ${socket.id}`);
+      } catch (err) {
+        logger.error('User authentication failed:', err.message);
+        socket.emit('error', { message: 'Authentication failed' });
+      }
+    });
+
+    /**
+     * Request Wallet Balance
+     */
+    socket.on('wallet:request-balance', async (data) => {
+      const { userId: reqUserId } = data;
+      
+      try {
+        const Wallet = require('../models/Wallet');
+        const wallet = await Wallet.findOne({ userId: reqUserId });
+        
+        if (wallet) {
+          socket.emit('wallet:balance', {
+            balance: wallet.balance,
+            currency: wallet.currency,
+            lastUpdated: wallet.lastUpdated,
+            timestamp: new Date()
+          });
+          logger.info(`Wallet balance sent to ${reqUserId}`);
+        } else {
+          socket.emit('error', { message: 'Wallet not found' });
+        }
+      } catch (err) {
+        logger.error('Error fetching wallet balance:', err.message);
+        socket.emit('error', { message: 'Failed to fetch balance' });
+      }
+    });
+
+    /**
+     * Request Transaction History
+     */
+    socket.on('transactions:request-history', async (data) => {
+      const { userId: reqUserId, limit = 10, skip = 0 } = data;
+      
+      try {
+        const Transaction = require('../models/Transaction');
+        const transactions = await Transaction.find({ userId: reqUserId })
+          .sort({ createdAt: -1 })
+          .limit(limit)
+          .skip(skip);
+        
+        socket.emit('transactions:history', {
+          transactions,
+          count: transactions.length,
+          timestamp: new Date()
+        });
+        logger.info(`Transaction history sent to ${reqUserId}`);
+      } catch (err) {
+        logger.error('Error fetching transactions:', err.message);
+        socket.emit('error', { message: 'Failed to fetch transactions' });
+      }
+    });
+
+    /**
+     * Poll Transfer Status
+     */
+    socket.on('transfer:poll-status', async (data) => {
+      const { transferId, reference } = data;
+      
+      try {
+        const Transaction = require('../models/Transaction');
+        const transaction = await Transaction.findOne({
+          $or: [{ _id: transferId }, { reference }]
+        });
+        
+        if (transaction) {
+          socket.emit('transfer:status-update', {
+            reference: transaction.reference,
+            status: transaction.status,
+            amount: transaction.amount,
+            timestamp: new Date()
+          });
+          logger.info(`Transfer status sent for ${reference}`);
+        } else {
+          socket.emit('error', { message: 'Transfer not found' });
+        }
+      } catch (err) {
+        logger.error('Error polling transfer status:', err.message);
+      }
+    });
+
+    /**
+     * Request KYC Status
+     */
+    socket.on('kyc:request-status', async (data) => {
+      const { userId: reqUserId } = data;
+      
+      try {
+        const UserKYC = require('../models/UserKYC');
+        const kyc = await UserKYC.findOne({ userId: reqUserId });
+        
+        if (kyc) {
+          socket.emit('kyc:status', {
+            status: kyc.status,
+            verificationLevel: kyc.verificationLevel,
+            limits: kyc.limits,
+            timestamp: new Date()
+          });
+          logger.info(`KYC status sent to ${reqUserId}`);
+        } else {
+          socket.emit('error', { message: 'KYC status not found' });
+        }
+      } catch (err) {
+        logger.error('Error fetching KYC status:', err.message);
+      }
+    });
+
+    /**
+     * Subscribe to Payment Request Updates
+     */
+    socket.on('payment-request:subscribe', (data) => {
+      const { paymentRequestId } = data;
+      socket.join(`payment-request:${paymentRequestId}`);
+      logger.info(`Socket ${socket.id} subscribed to payment request ${paymentRequestId}`);
+    });
+
+    /**
+     * Subscribe to Settlement Updates
+     */
+    socket.on('settlement:subscribe', (data) => {
+      const { merchantId } = data;
+      socket.join(`settlement:${merchantId}`);
+      logger.info(`Socket ${socket.id} subscribed to settlement ${merchantId}`);
+    });
+
+    /**
+     * Logout Event
+     */
+    socket.on('user:logout', (data) => {
+      const { userId: logoutUserId } = data;
+      logger.info(`User ${logoutUserId} logged out from socket ${socket.id}`);
+      socket.emit('logged_out', { message: 'You have been logged out' });
+    });
+
+    /**
+     * ========================================
+     * SPLIT BILLS & GROUP PAYMENTS
+     * ========================================
      */
     socket.on('admin:subscribe', async () => {
       if (userRole !== 'admin') {
@@ -356,8 +585,19 @@ function setupSocketHandlers(io) {
      * Disconnect
      */
     socket.on('disconnect', () => {
-      logger.info(`User disconnected: ${userId}`, { socketId: socket.id });
-      userConnections.delete(userId);
+      if (userId) {
+        logger.info(`User disconnected: ${userId}`, { socketId: socket.id });
+        
+        // Remove from connection map
+        userConnections.delete(userId);
+        
+        // Clean up room map
+        if (userRoomMap.has(userId)) {
+          userRoomMap.delete(userId);
+        }
+      } else {
+        logger.info(`Guest disconnected: ${socket.id}`);
+      }
       
       // Clean up rooms
       socket.rooms.forEach(room => {
