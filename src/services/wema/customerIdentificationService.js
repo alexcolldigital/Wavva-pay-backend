@@ -13,7 +13,7 @@ module.exports = {
         verificationType: 'BVN'
       };
 
-      const response = await wemaApiClient.post('/customeridentification/v1/bvn-verification', payload);
+      const response = await wemaApiClient.post('/customer-identification/bvn-verification', payload, process.env.WEMA_CUSTOMER_IDENTIFICATION_PRODUCT_CODE);
 
       if (response.data && response.data.success) {
         return {
@@ -51,7 +51,7 @@ module.exports = {
         verificationType: 'NIN'
       };
 
-      const response = await wemaApiClient.post('/customeridentification/v1/nin-verification', payload);
+      const response = await wemaApiClient.post('/customer-identification/nin-verification', payload, process.env.WEMA_CUSTOMER_IDENTIFICATION_PRODUCT_CODE);
 
       if (response.data && response.data.success) {
         return {

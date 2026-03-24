@@ -46,7 +46,7 @@ module.exports = {
       }
 
       // Try to get bank list from Wema API
-      const response = await wemaApiClient.get('/fundstransferopenapi/v1/banks');
+      const response = await wemaApiClient.get('/banks/list', {}, process.env.WEMA_BANK_LIST_PRODUCT_CODE);
 
       if (response.data && response.data.success && response.data.data) {
         return {

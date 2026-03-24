@@ -1047,6 +1047,290 @@ const bulkAutoVerifyUserKYC = async (req, res) => {
   }
 };
 
+// ===== EXPORT FUNCTIONS =====
+
+// Export Users
+const exportUsers = async (req, res) => {
+  try {
+    const { page = 1, limit = 1000, search = '', status = '', kycStatus = '', format = 'csv' } = req.query;
+
+    // Build query
+    const query = {};
+    if (status && status !== 'all') query.status = status;
+    if (kycStatus && kycStatus !== 'all') query.kycStatus = kycStatus;
+    if (search) {
+      query.$or = [
+        { firstName: { $regex: search, $options: 'i' } },
+        { lastName: { $regex: search, $options: 'i' } },
+        { email: { $regex: search, $options: 'i' } },
+        { username: { $regex: search, $options: 'i' } },
+      ];
+    }
+
+    const users = await User.find(query)
+      .populate('wallet', 'balance')
+      .select('firstName lastName email username phone status kycStatus createdAt lastLogin')
+      .sort({ createdAt: -1 })
+      .limit(parseInt(limit));
+
+    if (format === 'csv') {
+      const csvData = users.map(user => ({
+        'First Name': user.firstName || '',
+        'Last Name': user.lastName || '',
+        'Email': user.email || '',
+        'Username': user.username || '',
+        'Phone': user.phone || '',
+        'Status': user.status || '',
+        'KYC Status': user.kycStatus || '',
+        'Wallet Balance': user.wallet?.balance || 0,
+        'Joined Date': user.createdAt ? user.createdAt.toISOString().split('T')[0] : '',
+        'Last Login': user.lastLogin ? user.lastLogin.toISOString() : ''
+      }));
+
+      const { Parser } = require('json2csv');
+      const parser = new Parser();
+      const csv = parser.parse(csvData);
+
+      res.header('Content-Type', 'text/csv');
+      res.attachment('users.csv');
+      res.send(csv);
+    } else {
+      // Excel format
+      const XLSX = require('xlsx');
+      const ws = XLSX.utils.json_to_sheet(users.map(user => ({
+        'First Name': user.firstName || '',
+        'Last Name': user.lastName || '',
+        'Email': user.email || '',
+        'Username': user.username || '',
+        'Phone': user.phone || '',
+        'Status': user.status || '',
+        'KYC Status': user.kycStatus || '',
+        'Wallet Balance': user.wallet?.balance || 0,
+        'Joined Date': user.createdAt ? user.createdAt.toISOString().split('T')[0] : '',
+        'Last Login': user.lastLogin ? user.lastLogin.toISOString() : ''
+      })));
+
+      const wb = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(wb, ws, 'Users');
+      const buffer = XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' });
+
+      res.header('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+      res.attachment('users.xlsx');
+      res.send(buffer);
+    }
+  } catch (err) {
+    logger.error('User export failed', err.message);
+    res.status(500).json({ error: 'Failed to export users' });
+  }
+};
+
+// Export Transactions
+const exportTransactions = async (req, res) => {
+  try {
+    const { page = 1, limit = 1000, status = '', type = '', search = '', format = 'csv' } = req.query;
+
+    // Build query
+    const query = {};
+    if (status && status !== 'all') query.status = status;
+    if (type && type !== 'all') query.type = type;
+    if (search) {
+      query.$or = [
+        { transactionId: { $regex: search, $options: 'i' } },
+        { description: { $regex: search, $options: 'i' } },
+      ];
+    }
+
+    const transactions = await Transaction.find(query)
+      .populate('sender', 'firstName lastName email')
+      .populate('receiver', 'firstName lastName email')
+      .select('transactionId type amount status description createdAt sender receiver')
+      .sort({ createdAt: -1 })
+      .limit(parseInt(limit));
+
+    if (format === 'csv') {
+      const csvData = transactions.map(tx => ({
+        'Transaction ID': tx.transactionId || '',
+        'Type': tx.type || '',
+        'Amount': tx.amount || 0,
+        'Status': tx.status || '',
+        'Description': tx.description || '',
+        'Sender': tx.sender ? `${tx.sender.firstName} ${tx.sender.lastName}` : '',
+        'Sender Email': tx.sender?.email || '',
+        'Receiver': tx.receiver ? `${tx.receiver.firstName} ${tx.receiver.lastName}` : '',
+        'Receiver Email': tx.receiver?.email || '',
+        'Date': tx.createdAt ? tx.createdAt.toISOString() : ''
+      }));
+
+      const { Parser } = require('json2csv');
+      const parser = new Parser();
+      const csv = parser.parse(csvData);
+
+      res.header('Content-Type', 'text/csv');
+      res.attachment('transactions.csv');
+      res.send(csv);
+    } else {
+      // Excel format
+      const XLSX = require('xlsx');
+      const ws = XLSX.utils.json_to_sheet(transactions.map(tx => ({
+        'Transaction ID': tx.transactionId || '',
+        'Type': tx.type || '',
+        'Amount': tx.amount || 0,
+        'Status': tx.status || '',
+        'Description': tx.description || '',
+        'Sender': tx.sender ? `${tx.sender.firstName} ${tx.sender.lastName}` : '',
+        'Sender Email': tx.sender?.email || '',
+        'Receiver': tx.receiver ? `${tx.receiver.firstName} ${tx.receiver.lastName}` : '',
+        'Receiver Email': tx.receiver?.email || '',
+        'Date': tx.createdAt ? tx.createdAt.toISOString() : ''
+      })));
+
+      const wb = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(wb, ws, 'Transactions');
+      const buffer = XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' });
+
+      res.header('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+      res.attachment('transactions.xlsx');
+      res.send(buffer);
+    }
+  } catch (err) {
+    logger.error('Transaction export failed', err.message);
+    res.status(500).json({ error: 'Failed to export transactions' });
+  }
+};
+
+// Export Wallets
+const exportWallets = async (req, res) => {
+  try {
+    const { page = 1, limit = 1000, type = '', status = '', search = '', format = 'csv' } = req.query;
+
+    // Build query
+    const query = {};
+    if (type && type !== 'all') query.type = type;
+    if (status && status !== 'all') query.status = status;
+    if (search) {
+      query.$or = [
+        { accountNumber: { $regex: search, $options: 'i' } },
+      ];
+    }
+
+    const wallets = await Wallet.find(query)
+      .populate('user', 'firstName lastName email')
+      .select('type accountNumber balance status createdAt user dailyLimit monthlyLimit')
+      .sort({ createdAt: -1 })
+      .limit(parseInt(limit));
+
+    if (format === 'csv') {
+      const csvData = wallets.map(wallet => ({
+        'Wallet Type': wallet.type || '',
+        'Account Number': wallet.accountNumber || '',
+        'Balance': wallet.balance || 0,
+        'Status': wallet.status || '',
+        'User': wallet.user ? `${wallet.user.firstName} ${wallet.user.lastName}` : '',
+        'User Email': wallet.user?.email || '',
+        'Daily Limit': wallet.dailyLimit || 0,
+        'Monthly Limit': wallet.monthlyLimit || 0,
+        'Created Date': wallet.createdAt ? wallet.createdAt.toISOString().split('T')[0] : ''
+      }));
+
+      const { Parser } = require('json2csv');
+      const parser = new Parser();
+      const csv = parser.parse(csvData);
+
+      res.header('Content-Type', 'text/csv');
+      res.attachment('wallets.csv');
+      res.send(csv);
+    } else {
+      // Excel format
+      const XLSX = require('xlsx');
+      const ws = XLSX.utils.json_to_sheet(wallets.map(wallet => ({
+        'Wallet Type': wallet.type || '',
+        'Account Number': wallet.accountNumber || '',
+        'Balance': wallet.balance || 0,
+        'Status': wallet.status || '',
+        'User': wallet.user ? `${wallet.user.firstName} ${wallet.user.lastName}` : '',
+        'User Email': wallet.user?.email || '',
+        'Daily Limit': wallet.dailyLimit || 0,
+        'Monthly Limit': wallet.monthlyLimit || 0,
+        'Created Date': wallet.createdAt ? wallet.createdAt.toISOString().split('T')[0] : ''
+      })));
+
+      const wb = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(wb, ws, 'Wallets');
+      const buffer = XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' });
+
+      res.header('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+      res.attachment('wallets.xlsx');
+      res.send(buffer);
+    }
+  } catch (err) {
+    logger.error('Wallet export failed', err.message);
+    res.status(500).json({ error: 'Failed to export wallets' });
+  }
+};
+
+// Export Commission Stats
+const exportCommissionStats = async (req, res) => {
+  try {
+    const { format = 'csv' } = req.query;
+
+    // Get commission statistics
+    const stats = await getCommissionStats({});
+    const entries = await getLedgerEntries({ limit: 1000 });
+
+    if (format === 'csv') {
+      const csvData = entries.map(entry => ({
+        'Date': entry.createdAt ? entry.createdAt.toISOString().split('T')[0] : '',
+        'Type': entry.type || '',
+        'Amount': entry.amount || 0,
+        'Description': entry.description || '',
+        'Transaction ID': entry.transactionId || '',
+        'Wallet Type': entry.walletType || ''
+      }));
+
+      const { Parser } = require('json2csv');
+      const parser = new Parser();
+      const csv = parser.parse(csvData);
+
+      res.header('Content-Type', 'text/csv');
+      res.attachment('commission-stats.csv');
+      res.send(csv);
+    } else {
+      // Excel format
+      const XLSX = require('xlsx');
+      
+      // Create summary sheet
+      const summaryData = [{
+        'Total Commission': stats.totalCommission || 0,
+        'Monthly Commission': stats.monthlyCommission || 0,
+        'Average Rate': stats.averageRate || 0,
+        'Transaction Count': stats.transactionCount || 0
+      }];
+      
+      const ws1 = XLSX.utils.json_to_sheet(summaryData);
+      const ws2 = XLSX.utils.json_to_sheet(entries.map(entry => ({
+        'Date': entry.createdAt ? entry.createdAt.toISOString().split('T')[0] : '',
+        'Type': entry.type || '',
+        'Amount': entry.amount || 0,
+        'Description': entry.description || '',
+        'Transaction ID': entry.transactionId || '',
+        'Wallet Type': entry.walletType || ''
+      })));
+
+      const wb = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(wb, ws1, 'Summary');
+      XLSX.utils.book_append_sheet(wb, ws2, 'Entries');
+      const buffer = XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' });
+
+      res.header('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+      res.attachment('commission-stats.xlsx');
+      res.send(buffer);
+    }
+  } catch (err) {
+    logger.error('Commission export failed', err.message);
+    res.status(500).json({ error: 'Failed to export commission stats' });
+  }
+};
+
 module.exports = {
   getStats,
   getUsers,
@@ -1073,4 +1357,9 @@ module.exports = {
   getLedgerEntries: getLedgerEntries_endpoint,
   getLedgerSummary,
   getCommissionReport,
+  // Export functions
+  exportUsers,
+  exportTransactions,
+  exportWallets,
+  exportCommissionStats,
 };

@@ -34,6 +34,7 @@ const userSchema = new mongoose.Schema({
   
   // Admin & Account Status
   isAdmin: { type: Boolean, default: false },
+  role: { type: String, enum: ['customer', 'customer_rep', 'admin'], default: 'customer' },
   accountStatus: { type: String, enum: ['active', 'suspended', 'deleted'], default: 'active' },
   suspendedReason: String,
   suspendedAt: Date,
@@ -81,6 +82,9 @@ const userSchema = new mongoose.Schema({
   pin: String,
   pinAttempts: { type: Number, default: 0 },
   pinLockedUntil: Date,
+  
+  // Customer Representative assignment
+  assignedRep: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
   
   createdAt: { type: Date, default: Date.now },
   updatedAt: { type: Date, default: Date.now },

@@ -17,7 +17,7 @@ module.exports = {
 
       // Optionally call Wema API to get real-time balance
       try {
-        const response = await wemaApiClient.get(`/accountmaintenance/v1/accounts/${settlementAccount.accountNumber}/balance`);
+        const response = await wemaApiClient.get(`/settlement/balance/${settlementAccount.accountNumber}`, {}, process.env.WEMA_SETTLEMENT_PRODUCT_CODE);
 
         if (response.data && response.data.success) {
           settlementAccount.balance = response.data.data?.availableBalance;
@@ -53,7 +53,7 @@ module.exports = {
         pageSize: 100
       };
 
-      const response = await wemaApiClient.get('/accountmaintenance/v1/transactions', { params });
+      const response = await wemaApiClient.get('/accountmaintenance/v1/transactions', { params }, process.env.WEMA_SETTLEMENT_PRODUCT_CODE);
 
       return {
         success: true,
@@ -77,7 +77,7 @@ module.exports = {
         currencyCode: 'NGN'
       };
 
-      const response = await wemaApiClient.post('/fundstransferopenapi/v1/transfers', payload);
+      const response = await wemaApiClient.post('/funds-transfer-open/api/OpenApiTransfer/TransferFunds', payload, process.env.WEMA_OPEN_BANKING_PRODUCT_CODE);
 
       return {
         success: true,

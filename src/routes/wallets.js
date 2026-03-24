@@ -11,6 +11,7 @@ const {
   setLimits,
   checkLimits,
   deleteWallet,
+  freezeWallet,
 } = require('../controllers/walletsController');
 
 const router = express.Router();
@@ -29,6 +30,9 @@ router.post('/create-purpose-wallet', authMiddleware, createPurposeWallet);
 
 // Delete a wallet
 router.delete('/:walletId', authMiddleware, deleteWallet);
+
+// Freeze/unfreeze a wallet
+router.put('/:walletId/freeze', authMiddleware, freezeWallet);
 
 // Get wallets by purpose
 router.get('/by-purpose/:purpose', authMiddleware, getWalletsByPurpose);

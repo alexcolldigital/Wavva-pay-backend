@@ -486,6 +486,15 @@ const deleteWallet = async (req, res) => {
       return res.status(404).json({ error: 'Wallet not found' });
     }
 
+    // Don't allow deleting the default wallet (first NGN general wallet)
+    const isDefaultWallet = wallet.currency === 'NGN' && wallet.purpose === 'general' && 
+                           user.walletId.wallets.filter(w => w.currency === 'NGN' && w.purpose === 'general').indexOf(wallet) === 0;
+    if (isDefaultWallet) {
+      return res.status(400).json({ 
+        error: 'Cannot delete the default wallet. This wallet is required for basic account functionality.' 
+      });
+    }
+
     // Don't allow deleting if wallet has balance
     if (wallet.balance > 0) {
       return res.status(400).json({ 
@@ -508,6 +517,89 @@ const deleteWallet = async (req, res) => {
   }
 };
 
+// Freeze or unfreeze a wallet
+const freezeWallet = async (req, res) => {
+  try {
+    const { walletId } = req.params;
+    const { freeze, duration } = req.body; // freeze: boolean, duration: optional in minutes
+
+    const user = await User.findById(req.userId).populate('walletId');
+
+    if (!user?.walletId) {
+      return res.status(404).json({ error: 'Wallet not found' });
+    }
+
+    // Find the wallet
+    const wallet = user.walletId.wallets.find(w => w._id.toString() === walletId);
+    if (!wallet) {
+      return res.status(404).json({ error: 'Wallet not found' });
+    }
+
+    // Update wallet status
+    wallet.isActive = !freeze;
+
+    // If freezing with duration, set a timer to unfreeze
+    if (freeze && duration) {
+      setTimeout(async () => {
+        try {
+          const userDoc = await User.findById(req.userId).populate('walletId');
+          if (userDoc?.walletId) {
+            const walletToUnfreeze = userDoc.walletId.wallets.find(w => w._id.toString() === walletId);
+            if (walletToUnfreeze) {
+              walletToUnfreeze.isActive = true;
+              userDoc.walletId.markModified('wallets');
+              await userDoc.walletId.save();
+              
+              // Emit real-time update
+              const io = require('../services/socketService').getIO();
+              io.to(req.userId.toString()).emit('wallet:update', {
+                type: 'wallet_unfrozen',
+                walletId: walletId,
+                message: `Wallet ${wallet.name || wallet.purpose} has been automatically unfrozen`
+              });
+            }
+          }
+        } catch (err) {
+          console.error('Auto-unfreeze error:', err);
+        }
+      }, duration * 60 * 1000); // Convert minutes to milliseconds
+    }
+
+    user.walletId.markModified('wallets');
+    await user.walletId.save();
+
+    // Emit real-time update
+    const io = require('../services/socketService').getIO();
+    io.to(req.userId.toString()).emit('wallet:update', {
+      type: freeze ? 'wallet_frozen' : 'wallet_unfrozen',
+      walletId: walletId,
+      wallet: {
+        _id: wallet._id,
+        name: wallet.name,
+        purpose: wallet.purpose,
+        currency: wallet.currency,
+        isActive: wallet.isActive,
+      },
+      message: `Wallet ${wallet.name || wallet.purpose} has been ${freeze ? 'frozen' : 'unfrozen'}`
+    });
+
+    res.json({
+      success: true,
+      message: `Wallet ${freeze ? 'frozen' : 'unfrozen'} successfully`,
+      wallet: {
+        _id: wallet._id,
+        name: wallet.name,
+        purpose: wallet.purpose,
+        currency: wallet.currency,
+        isActive: wallet.isActive,
+      }
+    });
+  } catch (err) {
+    console.error('Freeze wallet error:', err);
+    res.status(500).json({ error: 'Failed to update wallet status' });
+  }
+};
+
 module.exports = {
   getAnalytics,
   getWallets,
@@ -519,4 +611,5 @@ module.exports = {
   setLimits,
   checkLimits,
   deleteWallet,
+  freezeWallet,
 };

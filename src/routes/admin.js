@@ -72,4 +72,10 @@ router.get('/ledger/summary', authMiddleware, adminMiddleware, adminController.g
 // Get detailed commission breakdown report
 router.get('/ledger/report', authMiddleware, adminMiddleware, adminController.getCommissionReport);
 
+// Export routes
+router.get('/users/export', authMiddleware, adminMiddleware, adminController.exportUsers);
+router.get('/transactions/export', authMiddleware, adminMiddleware, adminController.exportTransactions);
+router.get('/wallets/export', authMiddleware, adminMiddleware, adminController.exportWallets);
+router.get('/commission/export', authMiddleware, adminMiddleware, adminController.exportCommissionStats);
+
 module.exports = router;

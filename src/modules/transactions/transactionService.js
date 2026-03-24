@@ -1,0 +1,445 @@
+const mongoose = require('mongoose');
+const WalletService = require('../wallet/walletService');
+const CommissionService = require('../commission/commissionService');
+const Ledger = require('../models/Ledger');
+
+class TransactionService {
+  // Process a complete transaction with all wallet movements
+  static async processTransaction(transactionData) {
+    const session = await mongoose.startSession();
+    session.startTransaction();
+
+    try {
+      const {
+        type,
+        amount,
+        currency = 'NGN',
+        senderId,
+        receiverId,
+        merchantId,
+        provider = 'internal',
+        providerReference,
+        description,
+        metadata = {}
+      } = transactionData;
+
+      // Create transaction record
+      const Transaction = mongoose.model('Transaction');
+      const transaction = new Transaction({
+        sender: senderId,
+        receiver: receiverId,
+        amount,
+        currency,
+        type,
+        description,
+        method: provider,
+        metadata: { ...metadata, providerReference },
+        status: 'pending'
+      });
+
+      await transaction.save({ session });
+
+      // Calculate fees and commission
+      const commissionResult = await CommissionService.processCommission({
+        transactionType: type,
+        amount,
+        currency,
+        userId: senderId,
+        merchantId,
+        transactionId: transaction._id,
+        reference: providerReference || `TXN-${transaction._id}`,
+        provider,
+        dailyTransferCount: metadata.dailyTransferCount || 0
+      });
+
+      // Process main transaction based on type
+      let result;
+      switch (type) {
+        case 'transfer':
+          result = await this.processTransfer(transaction, session);
+          break;
+        case 'funding':
+          result = await this.processFunding(transaction, session);
+          break;
+        case 'merchant_payment':
+          result = await this.processMerchantPayment(transaction, session);
+          break;
+        case 'bill_payment':
+        case 'airtime':
+        case 'data':
+        case 'cable':
+        case 'electricity':
+          result = await this.processBillPayment(transaction, session);
+          break;
+        default:
+          throw new Error(`Unsupported transaction type: ${type}`);
+      }
+
+      // Update transaction status
+      transaction.status = 'completed';
+      transaction.feeAmount = commissionResult.fee;
+      transaction.netAmount = amount - commissionResult.fee;
+      await transaction.save({ session });
+
+      await session.commitTransaction();
+
+      return {
+        transaction,
+        commission: commissionResult,
+        result,
+        ledgerEntries: [...commissionResult.ledgerEntries, ...(result.ledgerEntries || [])]
+      };
+
+    } catch (error) {
+      await session.abortTransaction();
+      throw new Error(`Transaction processing failed: ${error.message}`);
+    } finally {
+      session.endSession();
+    }
+  }
+
+  // Process peer-to-peer transfer
+  static async processTransfer(transaction, session) {
+    const senderWallet = await WalletService.getUserWallet(transaction.sender, transaction.currency);
+    const receiverWallet = await WalletService.getUserWallet(transaction.receiver, transaction.currency);
+
+    if (!senderWallet || !receiverWallet) {
+      throw new Error('Wallet not found');
+    }
+
+    // Transfer from sender to receiver
+    const transferResult = await WalletService.transfer(
+      senderWallet.walletId,
+      receiverWallet.walletId,
+      transaction.netAmount || transaction.amount,
+      {
+        transactionId: transaction._id,
+        reference: `TRANSFER-${transaction._id}`,
+        type: 'transfer',
+        provider: transaction.method,
+        userId: transaction.sender,
+        description: transaction.description,
+        metadata: transaction.metadata
+      }
+    );
+
+    return {
+      senderWallet: transferResult.fromWallet,
+      receiverWallet: transferResult.toWallet,
+      ledgerEntries: [transferResult.ledgerEntry]
+    };
+  }
+
+  // Process wallet funding
+  static async processFunding(transaction, session) {
+    const settlementWallet = await WalletService.getSettlementWallet(transaction.currency);
+    const userWallet = await WalletService.getUserWallet(transaction.sender, transaction.currency);
+
+    if (!settlementWallet || !userWallet) {
+      throw new Error('Wallet not found');
+    }
+
+    // Move from settlement to user wallet
+    const transferResult = await WalletService.transfer(
+      settlementWallet.walletId,
+      userWallet.walletId,
+      transaction.netAmount || transaction.amount,
+      {
+        transactionId: transaction._id,
+        reference: `FUNDING-${transaction._id}`,
+        type: 'funding',
+        provider: transaction.method,
+        userId: transaction.sender,
+        description: transaction.description,
+        metadata: transaction.metadata
+      }
+    );
+
+    return {
+      settlementWallet: transferResult.fromWallet,
+      userWallet: transferResult.toWallet,
+      ledgerEntries: [transferResult.ledgerEntry]
+    };
+  }
+
+  // Process merchant payment
+  static async processMerchantPayment(transaction, session) {
+    const userWallet = await WalletService.getUserWallet(transaction.sender, transaction.currency);
+    const settlementWallet = await WalletService.getSettlementWallet(transaction.currency);
+
+    if (!userWallet || !settlementWallet) {
+      throw new Error('Wallet not found');
+    }
+
+    // Move from user to settlement (will be settled to merchant later)
+    const transferResult = await WalletService.transfer(
+      userWallet.walletId,
+      settlementWallet.walletId,
+      transaction.netAmount || transaction.amount,
+      {
+        transactionId: transaction._id,
+        reference: `MERCHANT-${transaction._id}`,
+        type: 'merchant_payment',
+        provider: transaction.method,
+        userId: transaction.sender,
+        merchantId: transaction.metadata.merchantId,
+        description: transaction.description,
+        metadata: transaction.metadata
+      }
+    );
+
+    return {
+      userWallet: transferResult.fromWallet,
+      settlementWallet: transferResult.toWallet,
+      ledgerEntries: [transferResult.ledgerEntry]
+    };
+  }
+
+  // Process bill payment
+  static async processBillPayment(transaction, session) {
+    const userWallet = await WalletService.getUserWallet(transaction.sender, transaction.currency);
+    const settlementWallet = await WalletService.getSettlementWallet(transaction.currency);
+
+    if (!userWallet || !settlementWallet) {
+      throw new Error('Wallet not found');
+    }
+
+    // Move from user to settlement (will be paid to bill provider)
+    const transferResult = await WalletService.transfer(
+      userWallet.walletId,
+      settlementWallet.walletId,
+      transaction.netAmount || transaction.amount,
+      {
+        transactionId: transaction._id,
+        reference: `BILL-${transaction._id}`,
+        type: transaction.type,
+        provider: transaction.method,
+        userId: transaction.sender,
+        description: transaction.description,
+        metadata: transaction.metadata
+      }
+    );
+
+    return {
+      userWallet: transferResult.fromWallet,
+      settlementWallet: transferResult.toWallet,
+      ledgerEntries: [transferResult.ledgerEntry]
+    };
+  }
+
+  // Process webhook settlement
+  static async processWebhookSettlement(webhookData) {
+    const session = await mongoose.startSession();
+    session.startTransaction();
+
+    try {
+      const {
+        reference,
+        amount,
+        currency = 'NGN',
+        provider,
+        providerReference,
+        status
+      } = webhookData;
+
+      if (status !== 'successful') {
+        await session.commitTransaction();
+        return { success: false, message: 'Transaction not successful' };
+      }
+
+      // Find existing transaction
+      const Transaction = mongoose.model('Transaction');
+      const transaction = await Transaction.findOne({
+        $or: [
+          { 'metadata.providerReference': providerReference },
+          { 'metadata.reference': reference }
+        ]
+      }).session(session);
+
+      if (!transaction) {
+        throw new Error('Transaction not found');
+      }
+
+      if (transaction.status === 'completed') {
+        await session.commitTransaction();
+        return { success: true, message: 'Transaction already processed' };
+      }
+
+      // Get settlement wallet
+      const settlementWallet = await WalletService.getSettlementWallet(currency);
+      if (!settlementWallet) {
+        throw new Error('Settlement wallet not found');
+      }
+
+      // Credit settlement wallet
+      const creditResult = await WalletService.creditWallet(
+        settlementWallet.walletId,
+        amount,
+        {
+          transactionId: transaction._id,
+          reference: `WEBHOOK-${providerReference}`,
+          type: 'settlement',
+          provider,
+          userId: transaction.sender,
+          description: `Settlement from ${provider}`,
+          metadata: webhookData
+        }
+      );
+
+      // Update transaction status
+      transaction.status = 'completed';
+      transaction.metadata.webhookProcessed = true;
+      transaction.metadata.webhookData = webhookData;
+      await transaction.save({ session });
+
+      await session.commitTransaction();
+
+      return {
+        success: true,
+        transaction,
+        settlement: creditResult,
+        message: 'Webhook settlement processed successfully'
+      };
+
+    } catch (error) {
+      await session.abortTransaction();
+      throw new Error(`Webhook settlement failed: ${error.message}`);
+    } finally {
+      session.endSession();
+    }
+  }
+
+  // Reverse transaction
+  static async reverseTransaction(transactionId, reason, reversedBy) {
+    const session = await mongoose.startSession();
+    session.startTransaction();
+
+    try {
+      const Transaction = mongoose.model('Transaction');
+      const transaction = await Transaction.findById(transactionId).session(session);
+
+      if (!transaction) {
+        throw new Error('Transaction not found');
+      }
+
+      if (transaction.status === 'reversed') {
+        throw new Error('Transaction already reversed');
+      }
+
+      // Reverse ledger entries
+      const ledgerEntries = await Ledger.find({
+        transactionId: transaction._id,
+        status: 'completed'
+      }).session(session);
+
+      for (const entry of ledgerEntries) {
+        await Ledger.reverseEntry(entry.ledgerId, reason, reversedBy);
+      }
+
+      // Update transaction status
+      transaction.status = 'reversed';
+      transaction.metadata.reversalReason = reason;
+      transaction.metadata.reversedBy = reversedBy;
+      transaction.metadata.reversedAt = new Date();
+      await transaction.save({ session });
+
+      await session.commitTransaction();
+
+      return {
+        transaction,
+        reversedEntries: ledgerEntries.length,
+        reason
+      };
+
+    } catch (error) {
+      await session.abortTransaction();
+      throw new Error(`Transaction reversal failed: ${error.message}`);
+    } finally {
+      session.endSession();
+    }
+  }
+
+  // Get transaction details with ledger
+  static async getTransactionDetails(transactionId) {
+    try {
+      const Transaction = mongoose.model('Transaction');
+      const transaction = await Transaction.findById(transactionId)
+        .populate('sender', 'firstName lastName email')
+        .populate('receiver', 'firstName lastName email');
+
+      if (!transaction) {
+        throw new Error('Transaction not found');
+      }
+
+      const ledgerEntries = await Ledger.find({ transactionId })
+        .populate('fromWallet', 'type name walletId')
+        .populate('toWallet', 'type name walletId')
+        .sort({ createdAt: 1 });
+
+      return {
+        transaction,
+        ledgerEntries
+      };
+
+    } catch (error) {
+      throw new Error(`Failed to get transaction details: ${error.message}`);
+    }
+  }
+
+  // Get transaction statistics
+  static async getTransactionStats(filters = {}) {
+    try {
+      const matchQuery = {};
+
+      if (filters.status) matchQuery.status = filters.status;
+      if (filters.type) matchQuery.type = filters.type;
+      if (filters.currency) matchQuery.currency = filters.currency;
+      if (filters.dateRange) {
+        matchQuery.createdAt = {
+          $gte: new Date(filters.dateRange.start),
+          $lte: new Date(filters.dateRange.end)
+        };
+      }
+
+      const stats = await mongoose.model('Transaction').aggregate([
+        { $match: matchQuery },
+        {
+          $group: {
+            _id: {
+              type: '$type',
+              status: '$status',
+              date: { $dateToString: { format: '%Y-%m-%d', date: '$createdAt' } }
+            },
+            count: { $sum: 1 },
+            totalAmount: { $sum: '$amount' },
+            totalFees: { $sum: '$feeAmount' }
+          }
+        },
+        {
+          $group: {
+            _id: '$_id.date',
+            transactions: {
+              $push: {
+                type: '$_id.type',
+                status: '$_id.status',
+                count: '$count',
+                amount: '$totalAmount',
+                fees: '$totalFees'
+              }
+            },
+            totalTransactions: { $sum: '$count' },
+            totalVolume: { $sum: '$totalAmount' },
+            totalFees: { $sum: '$totalFees' }
+          }
+        },
+        { $sort: { '_id': -1 } }
+      ]);
+
+      return stats;
+    } catch (error) {
+      throw new Error(`Failed to get transaction stats: ${error.message}`);
+    }
+  }
+}
+
+module.exports = TransactionService;

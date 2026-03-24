@@ -104,6 +104,34 @@ router.post('/admin/login', authController.adminLogin);
 
 /**
  * @swagger
+ * /auth/rep/login:
+ *   post:
+ *     tags:
+ *       - Authentication
+ *     summary: Customer Representative login
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             properties:
+ *               email:
+ *                 type: string
+ *               password:
+ *                 type: string
+ *     responses:
+ *       200:
+ *         description: Rep login successful
+ *       401:
+ *         description: Invalid credentials or not a customer representative
+ *       500:
+ *         description: Server error
+ */
+router.post('/rep/login', authController.repLogin);
+
+/**
+ * @swagger
  * /auth/google:
  *   post:
  *     tags:

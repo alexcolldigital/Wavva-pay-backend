@@ -28,7 +28,8 @@ module.exports = {
       };
 
       // Call Wema Virtual Account API
-      const response = await wemaApiClient.post('/virtualaccount/v1/accounts', payload);
+      // Based on ALAT Virtual Account API documentation
+      const response = await wemaApiClient.post('/VirtualAccount/api/v1/Prefix/CreateNew', payload);
 
       if (response.data && response.data.success) {
         const virtualAccount = response.data.data;
@@ -106,7 +107,7 @@ module.exports = {
         endDate
       };
 
-      const response = await wemaApiClient.get('/virtualaccount/v1/transactions', { params });
+      const response = await wemaApiClient.get('/VirtualAccount/api/v1/Trans/TransQuery', { params });
 
       return {
         success: true,

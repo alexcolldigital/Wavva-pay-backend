@@ -367,6 +367,57 @@ const adminLogin = async (req, res) => {
   }
 };
 
+// Customer Representative login
+const repLogin = async (req, res) => {
+  try {
+    const { email, password } = req.body;
+
+    // Validate input
+    if (!email || !password) {
+      return res.status(400).json({ error: 'Email and password required' });
+    }
+
+    // Find user by email
+    const user = await User.findOne({ email });
+    
+    if (!user) {
+      return res.status(401).json({ error: 'Invalid credentials' });
+    }
+
+    // Check if user is customer representative
+    if (user.role !== 'customer_rep' && !user.isAdmin) {
+      return res.status(401).json({ error: 'Not authorized as customer representative' });
+    }
+
+    // Verify password
+    const isPasswordValid = await user.comparePassword(password);
+    if (!isPasswordValid) {
+      return res.status(401).json({ error: 'Invalid credentials' });
+    }
+
+    // Generate token pair (access + refresh)
+    const { accessToken, refreshToken } = generateTokenPair(user._id);
+
+    res.json({
+      token: accessToken,
+      refreshToken,
+      rep: {
+        id: user._id,
+        email: user.email,
+        firstName: user.firstName,
+        lastName: user.lastName,
+        phone: user.phone || '',
+        role: user.role,
+        isAdmin: user.isAdmin,
+        createdAt: user.createdAt
+      }
+    });
+  } catch (err) {
+    logger.error('Rep login failed:', err.message);
+    res.status(500).json({ error: 'Login failed' });
+  }
+};
+
 // Google OAuth
 const googleSignIn = async (req, res) => {
   try {
@@ -736,6 +787,7 @@ module.exports = {
   signup,
   login,
   adminLogin,
+  repLogin,
   googleSignIn,
   refreshTokens,
   sendOtpHandler,

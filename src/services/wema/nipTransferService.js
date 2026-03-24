@@ -80,8 +80,8 @@ module.exports = {
         currencyCode: 'NGN'
       };
 
-      // Call Wema Funds Transfer API
-      const response = await wemaApiClient.post('/fundstransferopenapi/v1/transfers', payload);
+      // Call Wema Funds Transfer OpenAPI
+      const response = await wemaApiClient.post('/funds-transfer-open/api/OpenApiTransfer/TransferFunds', payload, process.env.WEMA_OPEN_BANKING_PRODUCT_CODE);
 
       if (response.data && response.data.success) {
         // Debit wallet
@@ -124,7 +124,7 @@ module.exports = {
 
   async getTransferStatus(transactionReference) {
     try {
-      const response = await wemaApiClient.get(`/fundstransferopenapi/v1/transfers/${transactionReference}`);
+      const response = await wemaApiClient.get(`/fundstransferopenapi/v1/transfers/${transactionReference}`, {}, process.env.WEMA_OPEN_BANKING_PRODUCT_CODE);
 
       return {
         success: true,

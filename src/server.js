@@ -86,6 +86,7 @@ app.use('/api/support', require('./routes/support'));
 app.use('/api/voice', require('./routes/voice'));
 app.use('/api/banking', require('./routes/banking'));
 app.use('/api/admin', require('./routes/admin'));
+app.use('/api/rep', require('./routes/rep'));
 
 // KYC Routes
 app.use('/api/kyc/user', require('./routes/userKYC'));

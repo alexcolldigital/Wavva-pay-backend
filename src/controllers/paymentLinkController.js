@@ -87,6 +87,26 @@ const createPaymentLink = async (req, res) => {
         }
       }
     });
+
+    // Emit real-time update to merchant
+    if (req.io) {
+      req.io.to(`user:${userId}`).emit('paymentLinks:update', {
+        type: 'link_created',
+        paymentLink: {
+          id: paymentLink._id,
+          title: paymentLink.title,
+          description: paymentLink.description,
+          amount: paymentLink.amount ? paymentLink.amount / 100 : null,
+          currency: paymentLink.currency,
+          slug: paymentLink.slug,
+          status: paymentLink.status,
+          views: paymentLink.views,
+          payments: paymentLink.completedCount,
+          createdAt: paymentLink.createdAt
+        }
+      });
+    }
+
   } catch (err) {
     console.error('Create payment link error:', err);
     res.status(500).json({ error: 'Failed to create payment link' });
@@ -236,6 +256,19 @@ const updatePaymentLink = async (req, res) => {
 
     await paymentLink.save();
 
+    // Emit real-time update to merchant
+    if (req.io) {
+      req.io.to(`user:${userId}`).emit('paymentLinks:update', {
+        type: 'link_updated',
+        paymentLink: {
+          id: paymentLink._id,
+          title: paymentLink.title,
+          description: paymentLink.description,
+          status: paymentLink.status
+        }
+      });
+    }
+
     res.json({
       success: true,
       message: 'Payment link updated successfully',
@@ -269,6 +302,16 @@ const deletePaymentLink = async (req, res) => {
 
     if (!paymentLink) {
       return res.status(404).json({ error: 'Payment link not found' });
+    }
+
+    // Emit real-time update to merchant
+    if (req.io) {
+      req.io.to(`user:${userId}`).emit('paymentLinks:update', {
+        type: 'link_deleted',
+        paymentLink: {
+          id: paymentLink._id
+        }
+      });
     }
 
     res.json({

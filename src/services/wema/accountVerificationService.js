@@ -50,7 +50,7 @@ module.exports = {
       };
 
       // Call Wema Account Verification/Name Enquiry API
-      const response = await wemaApiClient.post('/fundstransferopenapi/v1/name-enquiry', payload);
+      const response = await wemaApiClient.post('/account-verification/name-enquiry', payload, process.env.WEMA_ACCOUNT_VERIFICATION_PRODUCT_CODE);
 
       if (response.data && response.data.success) {
         return {
@@ -80,7 +80,7 @@ module.exports = {
         verificationType: 'BVN'
       };
 
-      const response = await wemaApiClient.post('/customeridentification/v1/verify', payload);
+      const response = await wemaApiClient.post('/customer-identification/verify', payload, process.env.WEMA_CUSTOMER_IDENTIFICATION_PRODUCT_CODE);
 
       if (response.data && response.data.success) {
         return {

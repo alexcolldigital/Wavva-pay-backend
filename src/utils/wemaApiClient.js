@@ -5,7 +5,7 @@ const axios = require('axios');
 
 class WemaApiClient {
   constructor() {
-    this.baseURL = process.env.WEMA_BASE_URL || 'https://wema-alatdev-apimgt.azure-api.net';
+    this.baseURL = process.env.WEMA_BASE_URL || 'https://wema-alatdev-apimgt.developer.azure-api.net';
     this.subscriptionKey = process.env.WEMA_SUBSCRIPTION_KEY;
     this.apiKey = process.env.WEMA_API_KEY;
     this.apiSecret = process.env.WEMA_API_SECRET;
@@ -44,24 +44,40 @@ class WemaApiClient {
     );
   }
 
-  // Generic GET request
-  async get(endpoint, params = {}) {
-    return this.client.get(endpoint, { params });
+  // Generic GET request with optional product code
+  async get(endpoint, params = {}, productCode = null) {
+    const config = { params };
+    if (productCode) {
+      config.headers = { 'X-Product-Code': productCode };
+    }
+    return this.client.get(endpoint, config);
   }
 
-  // Generic POST request
-  async post(endpoint, data = {}) {
-    return this.client.post(endpoint, data);
+  // Generic POST request with optional product code
+  async post(endpoint, data = {}, productCode = null) {
+    const config = {};
+    if (productCode) {
+      config.headers = { 'X-Product-Code': productCode };
+    }
+    return this.client.post(endpoint, data, config);
   }
 
-  // Generic PUT request
-  async put(endpoint, data = {}) {
-    return this.client.put(endpoint, data);
+  // Generic PUT request with optional product code
+  async put(endpoint, data = {}, productCode = null) {
+    const config = {};
+    if (productCode) {
+      config.headers = { 'X-Product-Code': productCode };
+    }
+    return this.client.put(endpoint, data, config);
   }
 
-  // Generic DELETE request
-  async delete(endpoint) {
-    return this.client.delete(endpoint);
+  // Generic DELETE request with optional product code
+  async delete(endpoint, productCode = null) {
+    const config = {};
+    if (productCode) {
+      config.headers = { 'X-Product-Code': productCode };
+    }
+    return this.client.delete(endpoint, config);
   }
 }
 
