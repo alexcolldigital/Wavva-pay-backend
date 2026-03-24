@@ -735,28 +735,41 @@ const createCheckoutSession = async (checkoutData) => {
  */
 const generatePaymentQR = async (merchantId, amount, currency = 'NGN', metadata = {}) => {
   try {
+    const frontendUrl = getFrontendUrl()
     const payload = {
       tx_ref: `QR-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
       amount,
       currency,
-      payment_type: 'qr',
-      merchant_id: merchantId,
-      meta: metadata,
+      redirect_url: `${frontendUrl}/wallet?payment_status=true`,
+      payment_options: 'qr',
+      customer: {
+        email: `qr-${merchantId}@wavvapay.com`, // Placeholder email for QR payments
+      },
+      customizations: {
+        title: 'Wavva Pay - QR Payment',
+        description: 'Scan QR code to pay',
+        logo: `${frontendUrl}/logo.png`,
+      },
+      meta: {
+        ...metadata,
+        payment_type: 'qr',
+        merchant_id: merchantId,
+      },
     };
 
-    const response = await flutterwaveClient.post('/payments/qr/generate', payload);
+    const response = await flutterwaveClient.post('/payments', payload);
 
     logger.info(`QR payment generated: ${payload.tx_ref}`);
 
     return {
       success: response.data.status === 'success',
-      qrCode: response.data.data?.qr_code,
-      qrData: response.data.data?.qr_data,
+      qrCode: response.data.data?.link, // Flutterwave returns payment link for QR
+      qrData: response.data.data?.link,
       reference: payload.tx_ref,
       amount: amount,
       currency: currency,
       merchantId: merchantId,
-      message: 'QR code generated successfully'
+      message: 'QR payment link generated successfully'
     };
   } catch (err) {
     logger.error('Flutterwave generatePaymentQR error:', err.response?.data || err.message);
@@ -777,18 +790,31 @@ const generatePaymentQR = async (merchantId, amount, currency = 'NGN', metadata 
  */
 const processPOSPayment = async (merchantId, amount, posData, metadata = {}) => {
   try {
+    const frontendUrl = getFrontendUrl()
     const payload = {
       tx_ref: `POS-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
       amount,
       currency: 'NGN',
-      payment_type: 'pos',
-      merchant_id: merchantId,
-      pos_terminal_id: posData.terminalId,
-      pos_transaction_ref: posData.transactionRef,
-      meta: metadata,
+      redirect_url: `${frontendUrl}/wallet?payment_status=true`,
+      payment_options: 'card,pos',
+      customer: {
+        email: `pos-${merchantId}@wavvapay.com`, // Placeholder email for POS payments
+      },
+      customizations: {
+        title: 'Wavva Pay - POS Payment',
+        description: 'Process payment via POS terminal',
+        logo: `${frontendUrl}/logo.png`,
+      },
+      meta: {
+        ...metadata,
+        payment_type: 'pos',
+        merchant_id: merchantId,
+        pos_terminal_id: posData.terminalId,
+        pos_transaction_ref: posData.transactionRef,
+      },
     };
 
-    const response = await flutterwaveClient.post('/payments/pos/process', payload);
+    const response = await flutterwaveClient.post('/payments', payload);
 
     logger.info(`POS payment processed: ${payload.tx_ref}`);
 
@@ -797,10 +823,11 @@ const processPOSPayment = async (merchantId, amount, posData, metadata = {}) => 
       transactionId: response.data.data?.id,
       reference: payload.tx_ref,
       status: response.data.data?.status,
+      paymentLink: response.data.data?.link,
       amount: amount,
       merchantId: merchantId,
       terminalId: posData.terminalId,
-      message: 'POS payment processed successfully'
+      message: 'POS payment link generated successfully'
     };
   } catch (err) {
     logger.error('Flutterwave processPOSPayment error:', err.response?.data || err.message);
@@ -822,17 +849,30 @@ const processPOSPayment = async (merchantId, amount, posData, metadata = {}) => 
  */
 const createPaymentRequest = async (senderId, amount, currency = 'NGN', description, metadata = {}) => {
   try {
+    const frontendUrl = getFrontendUrl()
     const payload = {
       tx_ref: `REQ-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
       amount,
       currency,
-      payment_type: 'request',
-      sender_id: senderId,
-      description: description || 'Payment request',
-      meta: metadata,
+      redirect_url: `${frontendUrl}/wallet?payment_status=true`,
+      payment_options: 'card,mobilemoney,ussd',
+      customer: {
+        email: `request-${senderId}@wavvapay.com`, // Placeholder email for payment requests
+      },
+      customizations: {
+        title: 'Wavva Pay - Payment Request',
+        description: description || 'Payment request',
+        logo: `${frontendUrl}/logo.png`,
+      },
+      meta: {
+        ...metadata,
+        payment_type: 'request',
+        sender_id: senderId,
+        request_description: description,
+      },
     };
 
-    const response = await flutterwaveClient.post('/payments/request', payload);
+    const response = await flutterwaveClient.post('/payments', payload);
 
     logger.info(`Payment request created: ${payload.tx_ref}`);
 
@@ -840,13 +880,13 @@ const createPaymentRequest = async (senderId, amount, currency = 'NGN', descript
       success: response.data.status === 'success',
       requestId: response.data.data?.id,
       reference: payload.tx_ref,
-      qrCode: response.data.data?.qr_code,
-      paymentLink: response.data.data?.payment_link,
+      qrCode: response.data.data?.link, // Payment link can be used as QR
+      paymentLink: response.data.data?.link,
       amount: amount,
       currency: currency,
       senderId: senderId,
       description: description,
-      message: 'Payment request created successfully'
+      message: 'Payment request link generated successfully'
     };
   } catch (err) {
     logger.error('Flutterwave createPaymentRequest error:', err.response?.data || err.message);
