@@ -7,7 +7,6 @@ WavvaPay uses a multi-API architecture to provide comprehensive financial servic
 
 ### 🔄 Wema API → Bank + Accounts
 **Primary Use Cases:**
-- Virtual account creation and management
 - Real bank account linking and verification
 - Interbank transfers (NIP transfers)
 - Account balance inquiries
@@ -15,11 +14,27 @@ WavvaPay uses a multi-API architecture to provide comprehensive financial servic
 - Settlement account management
 
 **Endpoints:**
-- `/api/wema/virtual-account/*` - Virtual account operations
 - `/api/wema/nip-transfer/*` - Interbank transfers
 - `/api/wema/account-verification/*` - Account verification
 - `/api/wema/bank-list/*` - Bank directory services
 - `/api/wema/settlement/*` - Settlement operations
+
+### 💠 Flutterwave Static Virtual Accounts
+**Primary Use Cases:**
+- Static/permanent virtual accounts (one per user)
+- Virtual account deposits and reconciliation
+- Webhook-based settlement processing
+
+**Endpoints:**
+- `/api/flutterwave/virtual-account/*` - Virtual account operations
+
+**Important:** Flutterwave static VA creation requires either BVN or NIN. The system now attempts to resolve identity from:
+- `User.bvn` or `User.nin` (preferred)
+- `UserKYC.idType` + `UserKYC.idNumber` (from KYC uploads)
+- legacy `User.kyc` fields as fallback
+
+Ensure KYC is verified before attempting virtual account creation to prevent:
+- `BVN or NIN is required for static account number creation`
 
 **Configuration:**
 ```env

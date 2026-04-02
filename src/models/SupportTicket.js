@@ -43,10 +43,6 @@ const supportTicketSchema = new mongoose.Schema({
     default: 'open',
     index: true
   },
-  assignedTo: {
-    type: mongoose.Schema.Types.ObjectId,
-    ref: 'User'
-  },
   responses: [{
     userId: {
       type: mongoose.Schema.Types.ObjectId,

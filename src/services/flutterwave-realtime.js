@@ -146,49 +146,6 @@ class FlutterwaveRealtimeService extends EventEmitter {
   // Payment Gateway
   // ============================================
 
-  async createPaymentLink(email, amount, title, description, metadata = {}) {
-    try {
-      const reference = `LINK-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
-      
-      const payload = {
-        tx_ref: reference,
-        amount,
-        currency: 'NGN',
-        redirect_url: `${process.env.FRONTEND_URL || 'http://localhost:3000'}/payment-success`,
-        payment_options: 'card,mobilemoney,ussd,bank_transfer',
-        customer: { email },
-        customizations: {
-          title,
-          description,
-          logo: `${process.env.FRONTEND_URL || 'http://localhost:3000'}/logo.png`
-        },
-        meta: metadata
-      };
-
-      const response = await this.client.post('/payments', payload);
-      const payment = response.data.data;
-
-      this.emit('payment-link:created', {
-        reference,
-        amount,
-        title,
-        timestamp: new Date()
-      });
-
-      return {
-        success: true,
-        paymentLink: payment.link,
-        reference,
-        amount,
-        title,
-        description
-      };
-    } catch (err) {
-      logger.error('Flutterwave createPaymentLink error:', err.message);
-      throw err;
-    }
-  }
-
   async getMerchantPaymentStatus(reference) {
     try {
       const response = await this.client.get(`/transactions/verify_by_reference?tx_ref=${reference}`);

@@ -2,7 +2,6 @@ const Merchant = require('../models/Merchant');
 const MerchantTransaction = require('../models/MerchantTransaction');
 const MerchantWallet = require('../models/MerchantWallet');
 const Settlement = require('../models/Settlement');
-const PaymentLink = require('../models/PaymentLink');
 
 // Get Dashboard Summary
 const getDashboardSummary = async (req, res) => {
@@ -219,42 +218,8 @@ const getSalesAnalytics = async (req, res) => {
   }
 };
 
-// Get Top Payment Links
-const getTopPaymentLinks = async (req, res) => {
-  try {
-    const userId = req.userId;
-    const { limit = 5 } = req.query;
-
-    const merchant = await Merchant.findOne({ userId });
-    if (!merchant) {
-      return res.status(404).json({ error: 'Merchant account not found' });
-    }
-
-    const paymentLinks = await PaymentLink.find({ merchantId: merchant._id })
-      .sort({ completedCount: -1 })
-      .limit(parseInt(limit));
-
-    res.json({
-      success: true,
-      topLinks: paymentLinks.map(link => ({
-        _id: link._id,
-        title: link.title,
-        completedCount: link.completedCount,
-        failedCount: link.failedCount,
-        totalValue: link.totalValue / 100,
-        views: link.views,
-        conversionRate: link.views > 0 ? ((link.completedCount / link.views) * 100).toFixed(2) : 0
-      }))
-    });
-  } catch (err) {
-    console.error('Get top payment links error:', err);
-    res.status(500).json({ error: 'Failed to fetch top payment links' });
-  }
-};
-
 module.exports = {
   getDashboardSummary,
   getTransactions,
-  getSalesAnalytics,
-  getTopPaymentLinks
+  getSalesAnalytics
 };

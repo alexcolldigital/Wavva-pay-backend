@@ -1,7 +1,6 @@
 const axios = require('axios');
 const TransactionService = require('../transactions/transactionService');
 const WalletService = require('../wallet/walletService');
-const Ledger = require('../models/Ledger');
 
 class FlutterwaveWebhookService {
   constructor() {

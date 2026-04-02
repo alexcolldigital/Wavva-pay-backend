@@ -11,6 +11,18 @@ const userSchema = new mongoose.Schema({
   username: { type: String, unique: true, sparse: true, lowercase: true, trim: true, minlength: 3, maxlength: 20 },
   userId: { type: String, unique: true, sparse: true }, // Generated unique ID (e.g., @user_12345)
   
+  // Wavva Tag - Primary P2P identifier (like CashApp $tag format: #wavvatag)
+  wavvaTag: { 
+    type: String, 
+    unique: true, 
+    sparse: true, 
+    lowercase: true, 
+    trim: true, 
+    minlength: 5, 
+    maxlength: 15,
+    index: true, // Index for fast lookup during payment searches
+  },
+  
   passwordHash: String,
   googleId: { type: String, unique: true, sparse: true },
   profilePicture: String,
@@ -25,6 +37,10 @@ const userSchema = new mongoose.Schema({
   phoneVerificationOTP: String,
   phoneVerificationExpires: Date,
   
+  // BVN / NIN for Flutterwave static virtual account creation
+  bvn: String,
+  nin: String,
+
   // KYC (basic)
   kyc: {
     verified: { type: Boolean, default: false },
@@ -34,7 +50,7 @@ const userSchema = new mongoose.Schema({
   
   // Admin & Account Status
   isAdmin: { type: Boolean, default: false },
-  role: { type: String, enum: ['customer', 'customer_rep', 'admin'], default: 'customer' },
+  role: { type: String, enum: ['customer', 'admin'], default: 'customer' },
   accountStatus: { type: String, enum: ['active', 'suspended', 'deleted'], default: 'active' },
   suspendedReason: String,
   suspendedAt: Date,
@@ -82,9 +98,6 @@ const userSchema = new mongoose.Schema({
   pin: String,
   pinAttempts: { type: Number, default: 0 },
   pinLockedUntil: Date,
-  
-  // Customer Representative assignment
-  assignedRep: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
   
   createdAt: { type: Date, default: Date.now },
   updatedAt: { type: Date, default: Date.now },

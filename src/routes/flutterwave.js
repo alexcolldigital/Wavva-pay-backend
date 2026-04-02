@@ -254,27 +254,6 @@ router.post('/subscription/create', authMiddleware, async (req, res) => {
   }
 });
 
-// Payment Link Routes
-router.post('/payment-link/create', authMiddleware, async (req, res) => {
-  try {
-    const { merchantId, amount, currency = 'NGN', description, metadata = {} } = req.body;
-
-    const result = await flutterwaveService.createPaymentLink(merchantId, amount, currency, description, metadata);
-
-    if (result.success) {
-      res.json(result);
-    } else {
-      res.status(400).json(result);
-    }
-  } catch (error) {
-    console.error('Flutterwave payment link creation error:', error);
-    res.status(500).json({
-      success: false,
-      message: error.message || 'Payment link creation failed'
-    });
-  }
-});
-
 // Checkout Session Routes
 router.post('/checkout/create', authMiddleware, async (req, res) => {
   try {

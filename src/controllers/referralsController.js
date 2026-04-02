@@ -43,18 +43,32 @@ const getReferralStats = async (req, res) => {
   try {
     const userId = req.userId;
 
+    if (!userId) {
+      return res.status(401).json({ error: 'User not authenticated' });
+    }
+
     const stats = await Referral.getReferralStats(userId);
 
-    // Get user's referral code
-    const user = await User.findById(userId).select('referralCode');
+    // Get user's referral code or generate one
+    let user = await User.findById(userId).select('referralCode');
     if (!user) {
       return res.status(404).json({ error: 'User not found' });
     }
 
+    // If user doesn't have a referral code, generate one
+    if (!user.referralCode) {
+      user.referralCode = Referral.schema.statics.generateReferralCode();
+      await user.save();
+    }
+
     res.json({
       success: true,
-      referralCode: user.referralCode,
-      stats
+      data: {
+        code: user.referralCode,
+        earnings: stats.earnings || 0,
+        totalReferrals: stats.totalReferrals || 0,
+        pendingRewards: stats.pendingRewards || 0
+      }
     });
   } catch (err) {
     console.error('Get referral stats error:', err);

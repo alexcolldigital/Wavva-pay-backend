@@ -577,6 +577,538 @@ function setupSocketHandlers(io) {
     });
 
     /**
+     * ========================================
+     * QR PAYMENTS - REAL-TIME HANDLERS
+     * ========================================
+     */
+
+    /**
+     * QR - Generate Payment Token
+     */
+    socket.on('qr:generate', async (data) => {
+      const { amount, currency = 'NGN', description } = data;
+
+      try {
+        if (!userId) {
+          socket.emit('error', { message: 'Authentication required' });
+          return;
+        }
+
+        // Generate QR token
+        const qrToken = `qr_${userId}_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+        
+        // Emit to sender (receiver of payment)
+        socket.emit('qr:generated', {
+          token: qrToken,
+          receiverId: userId,
+          amount,
+          currency,
+          description,
+          expiresAt: new Date(Date.now() + 15 * 60000), // 15 minutes
+          timestamp: new Date()
+        });
+
+        // Broadcast QR generation to admin dashboard for stats
+        io.to('admin_dashboard').emit('admin:qr-generated', {
+          token: qrToken,
+          amount,
+          currency,
+          timestamp: new Date()
+        });
+
+        logger.info(`QR token generated`, { userId, amount, currency });
+      } catch (error) {
+        logger.error('QR generation failed', error);
+        socket.emit('error', { message: 'Failed to generate QR' });
+      }
+    });
+
+    /**
+     * QR - Payment Initiated (when QR is scanned)
+     */
+    socket.on('qr:payment-initiated', async (data) => {
+      const { token, senderId, amount, pin } = data;
+
+      try {
+        logger.info('QR payment initiated', { token, senderId, amount });
+
+        // Broadcast to receiver that payment was initiated
+        io.to(`user:${userId}`).emit('qr:payment-initiated', {
+          token,
+          senderId,
+          amount,
+          status: 'initiated',
+          timestamp: new Date()
+        });
+
+        socket.emit('qr:payment-processing', {
+          token,
+          message: 'Processing QR payment...',
+          timestamp: new Date()
+        });
+
+      } catch (error) {
+        logger.error('QR payment initiation failed', error);
+        socket.emit('qr:payment-failed', {
+          error: error.message || 'Payment initiation failed'
+        });
+      }
+    });
+
+    /**
+     * QR - Payment Confirmed (payment succeeded)
+     */
+    socket.on('qr:payment-confirmed', async (data) => {
+      const { token, senderId, receiverId, amount, reference } = data;
+
+      try {
+        logger.info('QR payment confirmed', { token, senderId, receiverId, amount });
+
+        // Notify both parties
+        io.to(`user:${senderId}`).emit('qr:payment-confirmed', {
+          token,
+          reference,
+          amount,
+          status: 'completed',
+          message: 'Payment successful',
+          timestamp: new Date()
+        });
+
+        io.to(`user:${receiverId}`).emit('qr:payment-received', {
+          token,
+          senderId,
+          amount,
+          reference,
+          status: 'completed',
+          message: 'You received a payment',
+          timestamp: new Date()
+        });
+
+        // Broadcast to admin
+        io.to('admin_dashboard').emit('admin:qr-payment-completed', {
+          token,
+          amount,
+          reference,
+          timestamp: new Date()
+        });
+
+        socket.emit('qr:success', {
+          message: 'Payment confirmed',
+          reference
+        });
+
+      } catch (error) {
+        logger.error('QR payment confirmation failed', error);
+        socket.emit('qr:payment-failed', {
+          error: error.message || 'Confirmation failed'
+        });
+      }
+    });
+
+    /**
+     * QR - Payment Failed
+     */
+    socket.on('qr:payment-failed', async (data) => {
+      const { token, senderId, amount, reason } = data;
+
+      try {
+        logger.info('QR payment failed', { token, senderId, amount, reason });
+
+        // Notify sender
+        io.to(`user:${senderId}`).emit('qr:payment-failed', {
+          token,
+          amount,
+          reason,
+          message: 'Payment failed',
+          timestamp: new Date(),
+          canRetry: true
+        });
+
+        socket.emit('qr:error', {
+          message: 'Payment failed - you can retry',
+          reason
+        });
+
+      } catch (error) {
+        logger.error('QR payment failed notification error', error);
+      }
+    });
+
+    /**
+     * ========================================
+     * TAG-BASED TRANSFERS - REAL-TIME HANDLERS
+     * ========================================
+     */
+
+    /**
+     * TAG - Lookup User by Tag
+     */
+    socket.on('tag:lookup', async (data) => {
+      const { tag } = data;
+
+      try {
+        if (!tag) {
+          socket.emit('error', { message: 'Tag is required' });
+          return;
+        }
+
+        const User = require('../models/User');
+        const targetUser = await User.findOne({ username: tag.replace('#', '').toLowerCase() })
+          .select('_id username firstName lastName profilePicture');
+
+        if (targetUser) {
+          socket.emit('tag:lookup-success', {
+            tag,
+            user: targetUser,
+            timestamp: new Date()
+          });
+          logger.info(`Tag lookup successful`, { tag, userId });
+        } else {
+          socket.emit('tag:lookup-not-found', {
+            tag,
+            message: 'User not found',
+            timestamp: new Date()
+          });
+        }
+
+      } catch (error) {
+        logger.error('Tag lookup failed', error);
+        socket.emit('tag:lookup-error', {
+          error: error.message || 'Lookup failed'
+        });
+      }
+    });
+
+    /**
+     * TAG - Validate Tag Format
+     */
+    socket.on('tag:validate', async (data) => {
+      const { tag } = data;
+
+      try {
+        if (!tag) {
+          socket.emit('tag:validation-error', {
+            message: 'Tag is required'
+          });
+          return;
+        }
+
+        // Tag format validation: alphanumeric, 3-20 chars
+        const tagRegex = /^#?[a-zA-Z0-9_]{3,20}$/;
+        const isValid = tagRegex.test(tag);
+
+        if (isValid) {
+          // Check if tag is available
+          const User = require('../models/User');
+          const exists = await User.findOne({ 
+            username: tag.replace('#', '').toLowerCase() 
+          });
+
+          socket.emit('tag:validation-success', {
+            tag,
+            valid: true,
+            available: !exists,
+            timestamp: new Date()
+          });
+        } else {
+          socket.emit('tag:validation-error', {
+            tag,
+            message: 'Invalid tag format (3-20 alphanumeric characters)',
+            timestamp: new Date()
+          });
+        }
+
+      } catch (error) {
+        logger.error('Tag validation failed', error);
+        socket.emit('tag:validation-error', {
+          error: error.message || 'Validation failed'
+        });
+      }
+    });
+
+    /**
+     * TAG - Transfer Status
+     */
+    socket.on('tag:transfer-status', async (data) => {
+      const { referenceId } = data;
+
+      try {
+        const Transaction = require('../models/Transaction');
+        const transaction = await Transaction.findById(referenceId)
+          .populate('sender', 'username firstName lastName')
+          .populate('receiver', 'username firstName lastName');
+
+        if (transaction) {
+          socket.emit('tag:transfer-update', {
+            referenceId,
+            status: transaction.status,
+            amount: transaction.amount,
+            sender: transaction.sender,
+            receiver: transaction.receiver,
+            timestamp: transaction.updatedAt
+          });
+
+          logger.info(`Tag transfer status sent`, { referenceId, userId });
+        } else {
+          socket.emit('error', { message: 'Transfer not found' });
+        }
+
+      } catch (error) {
+        logger.error('Tag transfer status failed', error);
+        socket.emit('error', { message: 'Failed to fetch transfer status' });
+      }
+    });
+
+    /**
+     * ========================================
+     * PAYMENT FAILURE & RETRY HANDLING
+     * ========================================
+     */
+
+    /**
+     * PAYMENT - Retry Failed Payment
+     */
+    socket.on('payment:retry', async (data) => {
+      const { transactionId, pin } = data;
+
+      try {
+        logger.info('Payment retry initiated', { transactionId, userId });
+
+        const Transaction = require('../models/Transaction');
+        const transaction = await Transaction.findById(transactionId);
+
+        if (!transaction) {
+          socket.emit('error', { message: 'Transaction not found' });
+          return;
+        }
+
+        if (transaction.sender.toString() !== userId) {
+          socket.emit('error', { message: 'Unauthorized' });
+          return;
+        }
+
+        // Mark as retrying
+        socket.emit('payment:retrying', {
+          transactionId,
+          message: 'Retrying payment...',
+          timestamp: new Date()
+        });
+
+        logger.info(`Payment retry in progress`, { transactionId });
+
+      } catch (error) {
+        logger.error('Payment retry failed', error);
+        socket.emit('payment:retry-error', {
+          error: error.message || 'Retry failed'
+        });
+      }
+    });
+
+    /**
+     * PAYMENT - Timeout Handler
+     */
+    socket.on('payment:timeout', async (data) => {
+      const { transactionId } = data;
+
+      try {
+        logger.warn('Payment timeout', { transactionId, userId });
+
+        socket.emit('payment:timeout-confirmed', {
+          transactionId,
+          message: 'Payment request timed out',
+          timestamp: new Date(),
+          canRetry: true
+        });
+
+      } catch (error) {
+        logger.error('Payment timeout handler failed', error);
+      }
+    });
+
+    /**
+     * ========================================
+     * GROUP PAYMENT SETTLEMENT - REAL-TIME
+     * ========================================
+     */
+
+    /**
+     * GROUP - Payment Settled
+     */
+    socket.on('group_payment:settled', async (data) => {
+      const { groupId, totalAmount, distribution } = data;
+
+      try {
+        const GroupPayment = require('../models/GroupPayment');
+        const group = await GroupPayment.findById(groupId);
+
+        if (!group) {
+          socket.emit('error', { message: 'Group not found' });
+          return;
+        }
+
+        logger.info('Group payment settled', { groupId, totalAmount });
+
+        // Notify all group members about settlement
+        io.to(`group_payment:${groupId}`).emit('group_payment:settled', {
+          groupId,
+          totalAmount,
+          distribution,
+          message: 'Group payment goal reached and funds distributed',
+          timestamp: new Date()
+        });
+
+        // Record settlement in group
+        group.status = 'settled';
+        group.settledAt = new Date();
+        await group.save();
+
+      } catch (error) {
+        logger.error('Group payment settlement failed', error);
+        socket.emit('error', { message: 'Settlement failed' });
+      }
+    });
+
+    /**
+     * GROUP - Payment Distribution
+     */
+    socket.on('group_payment:distributed', async (data) => {
+      const { groupId, memberId, amountReceived } = data;
+
+      try {
+        logger.info('Group payment distributed to member', { groupId, memberId, amountReceived });
+
+        // Notify specific member about distribution
+        io.to(`user:${memberId}`).emit('group_payment:distributed', {
+          groupId,
+          amount: amountReceived,
+          message: 'You received your share of the group payment',
+          timestamp: new Date()
+        });
+
+        // Also broadcast to group room for visibility
+        io.to(`group_payment:${groupId}`).emit('group_payment:distribution-update', {
+          groupId,
+          memberId,
+          amountReceived,
+          timestamp: new Date()
+        });
+
+      } catch (error) {
+        logger.error('Group payment distribution failed', error);
+        socket.emit('error', { message: 'Distribution failed' });
+      }
+    });
+
+    /**
+     * ========================================
+     * SPLIT BILL PAYMENT STATUS - REAL-TIME
+     * ========================================
+     */
+
+    /**
+     * SPLIT BILL - Participant Status Update
+     */
+    socket.on('split_bill:participant_status', async (data) => {
+      const { billId, participantId, status } = data;
+
+      try {
+        const PaymentRequest = require('../models/PaymentRequest');
+        const bill = await PaymentRequest.findById(billId);
+
+        if (!bill) {
+          socket.emit('error', { message: 'Bill not found' });
+          return;
+        }
+
+        logger.info('Split bill participant status updated', { billId, participantId, status });
+
+        // Update participant status in the bill
+        const participant = bill.participants.find(p => p.userId.toString() === participantId);
+        if (participant) {
+          participant.status = status;
+          await bill.save();
+        }
+
+        // Broadcast status update to all participants
+        io.to(`split_bill:${billId}`).emit('split_bill:participant_status', {
+          billId,
+          participantId,
+          status,
+          message: `Participant status updated to ${status}`,
+          timestamp: new Date()
+        });
+
+      } catch (error) {
+        logger.error('Split bill participant status update failed', error);
+        socket.emit('error', { message: 'Status update failed' });
+      }
+    });
+
+    /**
+     * SPLIT BILL - Payment Received
+     */
+    socket.on('split_bill:payment_received', async (data) => {
+      const { billId, paymentId, participantId, amount } = data;
+
+      try {
+        logger.info('Split bill payment received', { billId, participantId, amount });
+
+        const PaymentRequest = require('../models/PaymentRequest');
+        const bill = await PaymentRequest.findById(billId);
+
+        if (!bill) {
+          socket.emit('error', { message: 'Bill not found' });
+          return;
+        }
+
+        // Update participant as paid
+        const participant = bill.participants.find(p => p.userId.toString() === participantId);
+        if (participant) {
+          participant.status = 'paid';
+          participant.paidAt = new Date();
+          await bill.save();
+        }
+
+        // Notify bill creator
+        io.to(`user:${bill.requestedBy}`).emit('split_bill:payment_received', {
+          billId,
+          paymentId,
+          participantId,
+          amount,
+          message: 'Payment received for split bill',
+          timestamp: new Date()
+        });
+
+        // Broadcast to all bill participants
+        io.to(`split_bill:${billId}`).emit('split_bill:payment_received', {
+          billId,
+          participantId,
+          amount,
+          status: 'paid',
+          timestamp: new Date()
+        });
+
+        // Check if all participants have paid
+        const allPaid = bill.participants.every(p => p.status === 'paid');
+        if (allPaid) {
+          bill.status = 'completed';
+          bill.completedAt = new Date();
+          await bill.save();
+
+          io.to(`split_bill:${billId}`).emit('split_bill:completed', {
+            billId,
+            message: 'All payments received - split bill completed',
+            timestamp: new Date()
+          });
+        }
+
+      } catch (error) {
+        logger.error('Split bill payment received failed', error);
+        socket.emit('error', { message: 'Payment recording failed' });
+      }
+    });
+
+    /**
      * Generic Room Leave
      */
     socket.on('leave_room', (room) => {
@@ -806,5 +1338,83 @@ module.exports = {
   broadcastUsersUpdate,
   broadcastNewTransaction,
   broadcastTransactionUpdate,
-  broadcastTransactionRefund
+  broadcastTransactionRefund,
+  broadcastQRPaymentUpdate,
+  broadcastTagTransferUpdate,
+  broadcastGroupPaymentUpdate,
+  broadcastSplitBillUpdate,
+  broadcastPaymentFailure,
+  broadcastPaymentSuccess
 };
+
+/**
+ * Broadcast QR payment update
+ */
+function broadcastQRPaymentUpdate(io, token, status, data) {
+  io.to(`qr:${token}`).emit('qr:update', {
+    token,
+    status,
+    ...data,
+    timestamp: new Date()
+  });
+}
+
+/**
+ * Broadcast tag transfer update
+ */
+function broadcastTagTransferUpdate(io, referenceId, status, data) {
+  io.to(`tag:${referenceId}`).emit('tag:transfer-update', {
+    referenceId,
+    status,
+    ...data,
+    timestamp: new Date()
+  });
+}
+
+/**
+ * Broadcast group payment update
+ */
+function broadcastGroupPaymentUpdate(io, groupId, status, data) {
+  io.to(`group_payment:${groupId}`).emit('group_payments:update', {
+    groupId,
+    status,
+    ...data,
+    timestamp: new Date()
+  });
+}
+
+/**
+ * Broadcast split bill update
+ */
+function broadcastSplitBillUpdate(io, billId, status, data) {
+  io.to(`split_bill:${billId}`).emit('splitBills:update', {
+    billId,
+    status,
+    ...data,
+    timestamp: new Date()
+  });
+}
+
+/**
+ * Broadcast payment failure to user
+ */
+function broadcastPaymentFailure(io, userId, error, details) {
+  io.to(`user:${userId}`).emit('payment:failed', {
+    error,
+    details,
+    canRetry: true,
+    timestamp: new Date()
+  });
+}
+
+/**
+ * Broadcast payment success to user
+ */
+function broadcastPaymentSuccess(io, userId, reference, amount) {
+  io.to(`user:${userId}`).emit('payment:success', {
+    reference,
+    amount,
+    message: 'Payment successful',
+    timestamp: new Date()
+  });
+}

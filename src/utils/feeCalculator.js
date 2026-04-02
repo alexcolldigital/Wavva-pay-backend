@@ -24,10 +24,17 @@ const FEE_CONFIG = {
 
 /**
  * Calculate transaction fee based on currency and transaction type
- * @param {number} amount - Amount in cents
+ * 
+ * Fee Model: Sender pays amount + fee, Receiver gets full amount
+ * Example: Send ₦7000 with 0.75% fee
+ *   - Receiver gets: ₦7000 (full amount)
+ *   - Sender pays: ₦7000 + ₦52.50 (₦7052.50)
+ *   - Fee/Commission: ₦52.50
+ * 
+ * @param {number} amount - Amount in cents (what receiver should get)
  * @param {string} currency - Currency code (USD or NGN)
  * @param {string} transactionType - Type of transaction
- * @returns {object} - { feePercentage, feeAmount, netAmount }
+ * @returns {object} - { feePercentage, feeAmount, netAmount, grossAmount }
  */
 function calculateFee(amount, currency = 'NGN', transactionType = 'p2p_transfer') {
   if (!amount || amount <= 0) {
@@ -44,13 +51,14 @@ function calculateFee(amount, currency = 'NGN', transactionType = 'p2p_transfer'
 
   const feePercentage = FEE_CONFIG[transactionType][currency];
   const feeAmount = Math.round((amount * feePercentage) / 100); // Calculate fee and round to nearest cent
-  const netAmount = amount - feeAmount;
+  const netAmount = amount; // Receiver gets the FULL amount (not amount - fee)
+  const grossAmount = amount + feeAmount; // Total sender pays
 
   return {
     feePercentage,
     feeAmount,
-    netAmount,
-    grossAmount: amount,
+    netAmount,         // What receiver gets (full amount)
+    grossAmount,       // What sender pays (amount + fee)
   };
 }
 

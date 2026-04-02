@@ -69,12 +69,66 @@ const initializePayment = async (email, amount, currency = 'NGN', metadata = {},
 };
 
 // Verify payment
-const verifyPayment = async (transactionId) => {
+const verifyPayment = async (transactionIdOrRef) => {
   try {
-    const response = await flutterwaveClient.get(`/transactions/${transactionId}/verify`);
-    
+    let response;
+
+    console.log('🔍 verifyPayment called with:', transactionIdOrRef);
+
+    // If the identifier looks numeric, try verify by transaction ID first
+    if (/^\d+$/.test(String(transactionIdOrRef))) {
+      console.log('📍 Using numeric transaction ID:', transactionIdOrRef);
+      response = await flutterwaveClient.get(`/transactions/${transactionIdOrRef}/verify`);
+    } else {
+      // Use GET endpoint with query parameter for tx_ref
+      console.log('📍 Using GET verify_by_reference with tx_ref:', transactionIdOrRef);
+      response = await flutterwaveClient.get('/transactions/verify_by_reference', {
+        params: { tx_ref: transactionIdOrRef }
+      });
+    }
+
+    console.log('✅ Flutterwave Response Status:', response.status);
+    console.log('📦 Response data:', JSON.stringify(response.data, null, 2));
+
+    if (!response.data?.data) {
+      // Check if response is an array (verify_by_reference returns array)
+      if (Array.isArray(response.data)) {
+        console.log('📊 Response is array, checking first element...');
+        if (response.data.length === 0) {
+          console.warn('⚠️ No transactions in response');
+          return {
+            success: false,
+            status: 'not_found',
+            error: 'Transaction not found in Flutterwave system',
+          };
+        }
+        // Use first transaction in array
+        const data = response.data[0];
+        const result = {
+          success: data.status === 'successful',
+          transactionId: data.id,
+          reference: data.tx_ref,
+          amount: data.amount,
+          currency: data.currency,
+          status: data.status,
+          paymentMethod: data.payment_type,
+          timestamp: data.created_at,
+        };
+
+        console.log('✅ Parsed result from array:', { status: result.status, success: result.success, amount: result.amount });
+        return result;
+      }
+
+      console.warn('⚠️ No transaction data in Flutterwave response');
+      return {
+        success: false,
+        status: 'unknown',
+        error: 'Transaction not found in Flutterwave system',
+      };
+    }
+
     const data = response.data.data;
-    return {
+    const result = {
       success: data.status === 'successful',
       transactionId: data.id,
       reference: data.tx_ref,
@@ -84,11 +138,31 @@ const verifyPayment = async (transactionId) => {
       paymentMethod: data.payment_type,
       timestamp: data.created_at,
     };
+
+    console.log('✅ Parsed result:', { status: result.status, success: result.success, amount: result.amount });
+    return result;
   } catch (err) {
-    logger.error('Flutterwave verifyPayment error:', err.response?.data || err.message);
+    const errorData = err.response?.data;
+    const statusCode = err.response?.status;
+    
+    console.error('❌ Flutterwave verifyPayment error:');
+    console.error('   Status:', statusCode);
+    console.error('   Message:', errorData?.message || err.message);
+    console.error('   Full response:', JSON.stringify(errorData, null, 2));
+
+    // Handle 404 as transaction not yet available (might be pending or failed)
+    if (statusCode === 404) {
+      return {
+        success: false,
+        status: 'not_found',
+        error: 'Transaction not yet available in Flutterwave system',
+      };
+    }
+
     return {
       success: false,
-      error: err.response?.data?.message || 'Verification failed',
+      status: 'error',
+      error: errorData?.message || err.message || 'Verification failed',
     };
   }
 };
@@ -498,57 +572,240 @@ const getDataPlans = (networkCode) => {
 };
 
 // ============================================
-// Card Payment Functions
+// Card Payment Functions (v4 API)
 // ============================================
 
 /**
- * Process card payment for wallet funding
+ * Initialize wallet funding (create customer and get reference)
  * @param {string} email - Customer email
  * @param {number} amount - Amount in NGN
- * @param {object} cardDetails - Card details
- * @param {object} metadata - Additional metadata
- * @returns {object} - Payment result
+ * @returns {object} - Initialization result
  */
-const processCardPayment = async (email, amount, cardDetails, metadata = {}) => {
+const initializeWalletFunding = async (email, amount) => {
   try {
-    const payload = {
-      tx_ref: `CARD-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
-      amount,
-      currency: 'NGN',
-      payment_type: 'card',
-      redirect_url: `${getFrontendUrl()}/wallet?payment_status=true`,
-      customer: {
-        email,
-      },
-      card: {
-        number: cardDetails.number,
-        cvv: cardDetails.cvv,
-        expiry_month: cardDetails.expiryMonth,
-        expiry_year: cardDetails.expiryYear,
-        pin: cardDetails.pin
-      },
-      meta: metadata,
+    // Create customer first
+    const customerPayload = {
+      email,
+      name: email.split('@')[0], // Use email prefix as name
     };
 
-    const response = await flutterwaveClient.post('/charges?type=card', payload);
+    const customerResponse = await flutterwaveClient.post('/customers', customerPayload);
+    
+    if (customerResponse.data.status !== 'success') {
+      return {
+        success: false,
+        error: 'Failed to create customer',
+      };
+    }
 
-    logger.info(`Card payment initiated: ${payload.tx_ref}`);
+    const customerId = customerResponse.data.data.id;
+    const reference = `WVF-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+
+    logger.info(`Wallet funding initialized: ${reference} for customer ${customerId}`);
+
+    return {
+      success: true,
+      customerId,
+      reference,
+      amount,
+      email,
+      message: 'Ready to accept card details'
+    };
+  } catch (err) {
+    logger.error('Flutterwave initializeWalletFunding error:', err.response?.data || err.message);
+    return {
+      success: false,
+      error: err.response?.data?.message || 'Wallet funding initialization failed',
+    };
+  }
+};
+
+/**
+ * Process card payment for wallet funding (create payment method and charge)
+ * @param {object} cardDetails - Card details
+ * @param {string} customerId - Customer ID from initialization
+ * @param {string} reference - Payment reference
+ * @param {number} amount - Amount in NGN
+ * @param {string} email - Customer email
+ * @returns {object} - Card processing result
+ */
+const processWalletFundingCard = async (cardDetails, customerId, reference, amount, email) => {
+  try {
+    // Generate encryption nonce
+    const nonce = Math.random().toString(36).substr(2, 9) + Date.now().toString(36);
+
+    // Create payment method with encrypted card details
+    const paymentMethodPayload = {
+      type: 'card',
+      card: {
+        encrypted_card_number: cardDetails.encryptedCardNumber || cardDetails.pan, // Frontend should encrypt
+        encrypted_expiry_month: cardDetails.encryptedExpiryMonth || cardDetails.expiryMonth,
+        encrypted_expiry_year: cardDetails.encryptedExpiryYear || cardDetails.expiryYear,
+        encrypted_cvv: cardDetails.encryptedCvv || cardDetails.cvv,
+        nonce: nonce,
+      },
+    };
+
+    const paymentMethodResponse = await flutterwaveClient.post('/payment-methods', paymentMethodPayload);
+
+    if (paymentMethodResponse.data.status !== 'success') {
+      return {
+        success: false,
+        error: 'Failed to create payment method',
+        status: paymentMethodResponse.data.status,
+      };
+    }
+
+    const paymentMethodId = paymentMethodResponse.data.data.id;
+
+    // Create charge
+    const chargePayload = {
+      amount: Math.round(amount * 100), // Convert to kobo
+      currency: 'NGN',
+      customer_id: customerId,
+      payment_method_id: paymentMethodId,
+      reference: reference,
+      meta: {
+        funding_type: 'wallet',
+        customer_email: email,
+      },
+    };
+
+    const chargeResponse = await flutterwaveClient.post('/charges', chargePayload);
+
+    logger.info(`Card charge created: ${reference}`, {
+      chargeId: chargeResponse.data.data?.id,
+      status: chargeResponse.data.data?.status,
+      authModel: chargeResponse.data.data?.next_action?.type,
+    });
+
+    return {
+      success: chargeResponse.data.status === 'success',
+      chargeId: chargeResponse.data.data?.id,
+      status: chargeResponse.data.data?.status,
+      authModel: chargeResponse.data.data?.next_action?.type,
+      reference: reference,
+      amount: amount,
+      message: chargeResponse.data.message || 'Card charge initiated'
+    };
+  } catch (err) {
+    logger.error('Flutterwave processWalletFundingCard error:', err.response?.data || err.message);
+    return {
+      success: false,
+      error: err.response?.data?.message || 'Card processing failed',
+    };
+  }
+};
+
+/**
+ * Authorize card payment (handle PIN/OTP)
+ * @param {string} chargeId - Charge ID
+ * @param {object} authDetails - Authorization details (PIN or OTP)
+ * @returns {object} - Authorization result
+ */
+const authorizeWalletFunding = async (chargeId, authDetails) => {
+  try {
+    let updatePayload;
+
+    if (authDetails.pin) {
+      // Handle PIN authorization
+      const nonce = Math.random().toString(36).substr(2, 9) + Date.now().toString(36);
+      updatePayload = {
+        authorization: {
+          type: 'pin',
+          pin: {
+            nonce: nonce,
+            encrypted_pin: authDetails.encryptedPin || authDetails.pin, // Frontend should encrypt
+          },
+        },
+      };
+    } else if (authDetails.otp) {
+      // Handle OTP authorization
+      updatePayload = {
+        authorization: {
+          type: 'otp',
+          otp: {
+            code: authDetails.otp,
+          },
+        },
+      };
+    } else {
+      return {
+        success: false,
+        error: 'PIN or OTP required for authorization',
+      };
+    }
+
+    const response = await flutterwaveClient.put(`/charges/${chargeId}`, updatePayload);
+
+    logger.info(`Card authorization updated: ${chargeId}`, {
+      status: response.data.data?.status,
+      nextAction: response.data.data?.next_action?.type,
+    });
 
     return {
       success: response.data.status === 'success',
-      transactionId: response.data.data?.id,
-      reference: payload.tx_ref,
-      status: response.data.data?.status || response.data.status,
-      amount: amount,
-      currency: 'NGN',
-      paymentMethod: 'card',
-      message: response.data.message || 'Card payment processed'
+      status: response.data.data?.status,
+      nextAction: response.data.data?.next_action?.type,
+      chargeId: chargeId,
+      message: response.data.message || 'Authorization processed'
     };
   } catch (err) {
-    logger.error('Flutterwave processCardPayment error:', err.response?.data || err.message);
+    logger.error('Flutterwave authorizeWalletFunding error:', err.response?.data || err.message);
     return {
       success: false,
-      error: err.response?.data?.message || 'Card payment failed',
+      error: err.response?.data?.message || 'Authorization failed',
+    };
+  }
+};
+
+/**
+ * Verify wallet funding payment
+ * @param {string} reference - Payment reference
+ * @returns {object} - Verification result
+ */
+const verifyWalletFunding = async (reference) => {
+  try {
+    // Find the charge by reference
+    const chargesResponse = await flutterwaveClient.get('/charges', {
+      params: { reference: reference }
+    });
+
+    if (!chargesResponse.data.data || chargesResponse.data.data.length === 0) {
+      return {
+        success: false,
+        error: 'Charge not found',
+      };
+    }
+
+    const charge = chargesResponse.data.data[0];
+
+    // Check if payment is successful
+    const isSuccessful = charge.status === 'successful' || charge.status === 'completed';
+
+    logger.info(`Wallet funding verified: ${reference}`, {
+      chargeId: charge.id,
+      status: charge.status,
+      amount: charge.amount / 100, // Convert from kobo
+    });
+
+    return {
+      success: isSuccessful,
+      chargeId: charge.id,
+      reference: reference,
+      status: charge.status,
+      amount: charge.amount / 100, // Convert from kobo
+      currency: charge.currency,
+      customerId: charge.customer_id,
+      paymentMethod: charge.payment_method_details?.type || 'card',
+      timestamp: charge.created_datetime,
+      message: isSuccessful ? 'Payment successful' : 'Payment not completed'
+    };
+  } catch (err) {
+    logger.error('Flutterwave verifyWalletFunding error:', err.response?.data || err.message);
+    return {
+      success: false,
+      error: err.response?.data?.message || 'Verification failed',
     };
   }
 };
@@ -628,59 +885,6 @@ const createRecurringPayment = async (email, amount, interval, cardDetails, meta
 // ============================================
 
 /**
- * Create payment link for merchant payments
- * @param {string} merchantId - Merchant ID
- * @param {number} amount - Payment amount
- * @param {string} currency - Currency code
- * @param {string} description - Payment description
- * @param {object} metadata - Additional metadata
- * @returns {object} - Payment link result
- */
-const createPaymentLink = async (merchantId, amount, currency = 'NGN', description, metadata = {}) => {
-  try {
-    const payload = {
-      tx_ref: `LINK-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
-      amount,
-      currency,
-      redirect_url: `${getFrontendUrl()}/payment/success`,
-      payment_options: 'card,mobilemoney,ussd,banktransfer',
-      customer: {
-        email: metadata.customerEmail || 'customer@example.com',
-      },
-      customizations: {
-        title: 'Payment Link',
-        description: description || 'Secure payment',
-        logo: metadata.logo || `${getFrontendUrl()}/logo.png`,
-      },
-      meta: {
-        merchantId,
-        ...metadata
-      },
-    };
-
-    const response = await flutterwaveClient.post('/payments', payload);
-
-    logger.info(`Payment link created: ${payload.tx_ref}`);
-
-    return {
-      success: response.data.status === 'success',
-      paymentLink: response.data.data?.link,
-      reference: payload.tx_ref,
-      amount: amount,
-      currency: currency,
-      merchantId: merchantId,
-      message: 'Payment link created successfully'
-    };
-  } catch (err) {
-    logger.error('Flutterwave createPaymentLink error:', err.response?.data || err.message);
-    return {
-      success: false,
-      error: err.response?.data?.message || 'Payment link creation failed',
-    };
-  }
-};
-
-/**
  * Create checkout session for website payments
  * @param {object} checkoutData - Checkout configuration
  * @returns {object} - Checkout session result
@@ -688,7 +892,7 @@ const createPaymentLink = async (merchantId, amount, currency = 'NGN', descripti
 const createCheckoutSession = async (checkoutData) => {
   try {
     const payload = {
-      tx_ref: `CHECKOUT-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
+      tx_ref: checkoutData.tx_ref || `CHECKOUT-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
       amount: checkoutData.amount,
       currency: checkoutData.currency || 'NGN',
       redirect_url: checkoutData.redirectUrl || `${getFrontendUrl()}/checkout/success`,
@@ -1069,12 +1273,16 @@ module.exports = {
   verifyPayment,
   getTransactionDetails,
   
-  // Card payments
-  processCardPayment,
+  // Wallet funding (v4 API)
+  initializeWalletFunding,
+  processWalletFundingCard,
+  authorizeWalletFunding,
+  verifyWalletFunding,
+  
+  // Card payments (legacy)
   createRecurringPayment,
   
   // Payment gateway
-  createPaymentLink,
   createCheckoutSession,
   
   // Transfers and bank operations

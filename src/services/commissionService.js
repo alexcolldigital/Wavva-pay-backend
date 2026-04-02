@@ -28,7 +28,7 @@ async function getInternalLedgerUser() {
         password: 'system-ledger-' + Math.random().toString(36).substring(7), // Random password
         isAdmin: true,
         isSystemAccount: true, // Mark as system account
-        accountStatus: 'verified',
+        accountStatus: 'active',
         kycStatus: 'verified',
       });
       

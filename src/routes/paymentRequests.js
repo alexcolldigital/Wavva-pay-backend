@@ -22,9 +22,6 @@ router.post('/:requestId/respond', paymentRequestController.respondToPaymentRequ
 // Record a payment
 router.post('/:requestId/pay', paymentRequestController.recordPayment);
 
-// Create Paystack payment links
-router.post('/:requestId/create-payment-links', paymentRequestController.createPaymentLinks);
-
 // Cancel a payment request
 router.post('/:requestId/cancel', paymentRequestController.cancelPaymentRequest);
 

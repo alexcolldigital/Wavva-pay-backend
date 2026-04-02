@@ -2,6 +2,7 @@ const User = require('../models/User');
 const Wallet = require('../models/Wallet');
 const Transaction = require('../models/Transaction');
 const walletService = require('../services/walletService');
+const logger = require('../utils/logger');
 
 // Get wallet analytics
 const getAnalytics = async (req, res) => {
@@ -65,22 +66,51 @@ const getWallets = async (req, res) => {
   try {
     const user = await User.findById(req.userId).populate('walletId');
 
-    if (!user?.walletId) {
-      return res.status(404).json({ success: false, error: 'Wallet not found' });
+    let wallet = user?.walletId;
+
+    // Auto-create wallet if it doesn't exist
+    if (!wallet) {
+      console.log('⚠️ User has no wallet, auto-creating...');
+      const Wallet = require('../models/Wallet');
+      
+      // Create new wallet for user
+      wallet = new Wallet({
+        userId: req.userId,
+        balance: 0,
+        currency: 'NGN',
+        wallets: [
+          {
+            currency: 'NGN',
+            purpose: 'general',
+            name: 'NGN Wallet',
+            balance: 0,
+            isActive: true
+          }
+        ]
+      });
+      
+      await wallet.save();
+      
+      // Link wallet to user
+      user.walletId = wallet._id;
+      await user.save();
+      
+      console.log('✅ Auto-created wallet for user:', req.userId);
     }
 
-    const wallet = user.walletId;
-
     // Ensure virtual account exists for user
+    // Virtual accounts are created automatically on first wallet access
+    // KYC is used later to upgrade to permanent VA and increase limits
     try {
       if (!wallet.virtualAccountNumber) {
-        await walletService.createVirtualAccountForUser(req.userId);
-        // Re-fetch wallet after virtual account creation
-        await wallet.reload();
+        const vaResult = await walletService.createVirtualAccountForUser(req.userId);
+        if (vaResult?.success) {
+          await wallet.reload();
+        }
       }
     } catch (virtualAccountError) {
-      console.warn('Failed to create virtual account:', virtualAccountError.message);
-      // Continue without virtual account for now
+      // Log but don't fail - wallet still works without VA initially
+      logger.debug('Virtual account creation warning:', virtualAccountError.message);
     }
 
     // Get or create NGN wallet

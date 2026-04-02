@@ -13,7 +13,4 @@ router.get('/transactions', authMiddleware, merchantDashboardController.getTrans
 // Sales Analytics
 router.get('/analytics', authMiddleware, merchantDashboardController.getSalesAnalytics);
 
-// Top Payment Links
-router.get('/top-links', authMiddleware, merchantDashboardController.getTopPaymentLinks);
-
 module.exports = router;

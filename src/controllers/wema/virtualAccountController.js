@@ -1,15 +1,16 @@
-// Virtual Account Controller
-const virtualAccountService = require('../../services/wema/virtualAccountService');
+// Virtual Account Controller (now backed by Flutterwave)
+const walletService = require('../../services/walletService');
 
 module.exports = {
   async create(req, res) {
     try {
       const { userId } = req; // From auth middleware
-      const userDetails = req.body;
 
-      const result = await virtualAccountService.createVirtualAccount(userId, userDetails);
+      const result = await walletService.createVirtualAccountForUser(userId);
 
-      res.json(result);
+      // Return success or error
+      // Note: VA is always created on first call, KYC only determines if it's permanent or temporary
+      res.status(result.success ? 200 : 400).json(result);
     } catch (error) {
       console.error('Virtual Account Creation Error:', error);
       res.status(500).json({
@@ -23,7 +24,7 @@ module.exports = {
     try {
       const { userId } = req; // From auth middleware
 
-      const result = await virtualAccountService.getVirtualAccount(userId);
+      const result = await walletService.getWalletWithVirtualAccount(userId);
 
       res.json(result);
     } catch (error) {
@@ -37,12 +38,9 @@ module.exports = {
 
   async getTransactions(req, res) {
     try {
-      const { userId } = req;
-      const { startDate, endDate } = req.query;
-
-      const result = await virtualAccountService.getVirtualAccountTransactions(userId, startDate, endDate);
-
-      res.json(result);
+      // Flutterwave virtual account transaction queries are not yet implemented here
+      // Use the general transactions endpoint or implement dedicated integration as needed
+      return res.status(501).json({ success: false, message: 'Virtual account transaction retrieval not implemented for Flutterwave' });
     } catch (error) {
       console.error('Get Virtual Account Transactions Error:', error);
       res.status(500).json({

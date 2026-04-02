@@ -28,18 +28,19 @@ router.get('/tier1/requirements', auth, async (req, res) => {
 // Submit Tier 1 KYC
 router.post('/tier1/submit', auth, async (req, res) => {
   try {
-    const { phoneNumber, firstName, lastName, dateOfBirth } = req.body;
+    const { phoneNumber, email, firstName, lastName, dateOfBirth } = req.body;
 
     // Validate input
-    if (!phoneNumber || !firstName || !lastName || !dateOfBirth) {
+    if (!phoneNumber || !email || !firstName || !lastName || !dateOfBirth) {
       return res.status(400).json({
         success: false,
-        error: 'Missing required fields: phoneNumber, firstName, lastName, dateOfBirth'
+        error: 'Missing required fields: phoneNumber, email, firstName, lastName, dateOfBirth'
       });
     }
 
     const result = await kycService.submitTier1(req.user.id, {
       phoneNumber,
+      email,
       firstName,
       lastName,
       dateOfBirth

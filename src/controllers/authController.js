@@ -1,10 +1,14 @@
 const jwt = require('jsonwebtoken');
 const User = require('../models/User');
 const Wallet = require('../models/Wallet');
-const wemaService = require('../services/wema');
+const UserKYC = require('../models/UserKYC');
+const FlutterwaveService = require('../modules/flutterwave/flutterwaveService');
 const { sendOTP } = require('../services/notifications');
 const { generateTokenPair, verifyToken } = require('../utils/tokenManager');
+const { assignDefaultWavvaTag } = require('../utils/wavvaTag');
 const logger = require('../utils/logger');
+
+const flutterwaveService = new FlutterwaveService();
 
 // Signup
 const signup = async (req, res) => {
@@ -143,6 +147,7 @@ const signup = async (req, res) => {
       firstName: firstName.trim(),
       lastName: lastName.trim(),
       username: username.toLowerCase().trim(),
+      wavvaTag: await assignDefaultWavvaTag(User, { username: username.toLowerCase(), email: email.toLowerCase(), firstName, lastName }),
       email: email.toLowerCase(),
       phone: phone ? phone.trim() : undefined,
       passwordHash: password,
@@ -179,35 +184,55 @@ const signup = async (req, res) => {
     await user.save();
     console.log('[DEBUG] Wallet reference saved');
     
-    // Create virtual account for user (Wema ALAT)
-    console.log('[DEBUG] Creating virtual account...');
+    // Create virtual account for user (Flutterwave)
+    console.log('[DEBUG] Creating virtual account via Flutterwave...');
     try {
-      const virtualAccountResult = await wemaService.createVirtualAccount(
-        user._id.toString(),
-        user.email,
-        user.firstName,
-        user.lastName,
-        user.phone || '',
-        { platform: 'wavvapay' }
-      );
+      const userKYC = await UserKYC.findOne({ userId: user._id });
+      const kycIdType = (userKYC?.idType || user?.kyc?.idType || '').toLowerCase();
+      const kycIdNumber = userKYC?.idNumber || user?.kyc?.idNumber;
+      const identityNumber = user.bvn || user.nin || ((kycIdType === 'bvn' || kycIdType === 'nin' || kycIdType === 'national_id') ? kycIdNumber : null);
+
+      const reference = `WAVVA_VA_${user._id}_${Date.now()}`;
+      const vaPayload = {
+        email: user.email,
+        amount: 0,
+        tx_ref: reference,
+        narration: `WavvaPay virtual account for ${user.firstName || ''} ${user.lastName || ''}`.trim(),
+        is_permanent: false, // Start with temporary, upgrade to permanent with KYC
+      };
+
+      // Add KYC data if available (user completed tier 2)
+      // This allows for permanent VA immediately if KYC is provided
+      if (identityNumber) {
+        vaPayload.is_permanent = true;
+        if (user.bvn || kycIdType === 'bvn') {
+          vaPayload.bvn = user.bvn || kycIdNumber;
+        } else {
+          vaPayload.nin = user.nin || kycIdNumber;
+        }
+      }
+
+      const virtualAccountResult = await flutterwaveService.createVirtualAccount(vaPayload);
       
-      if (virtualAccountResult.success) {
+      if (virtualAccountResult && virtualAccountResult.status === 'success' && virtualAccountResult.data) {
+        const accountData = virtualAccountResult.data;
         user.virtualAccount = {
-          accountNumber: virtualAccountResult.accountNumber,
-          accountName: virtualAccountResult.accountName,
-          bankCode: virtualAccountResult.bankCode,
-          bankName: virtualAccountResult.bankName,
-          status: virtualAccountResult.status,
-          accountId: virtualAccountResult.accountId,
-          reference: virtualAccountResult.reference,
+          accountNumber: accountData.account_number,
+          accountName: accountData.account_name,
+          bankCode: accountData.bank_code,
+          bankName: accountData.bank_name || 'Flutterwave',
+          status: 'active',
+          accountId: accountData.id,
+          reference: accountData.reference || reference,
           createdAt: new Date(),
         };
         await user.save();
-        console.log('[DEBUG] Virtual account created and assigned:', virtualAccountResult.accountNumber);
+        console.log('[DEBUG] Virtual account created and assigned:', accountData.account_number);
       } else {
         // Virtual account creation failed but continue (non-critical)
-        logger.warn('Virtual account creation failed:', virtualAccountResult.error);
-        console.log('[WARN] Virtual account creation failed, continuing without it');
+        // Flutterwave requires BVN/NIN for VA creation
+        logger.warn(`Virtual account creation skipped for user ${user._id}: ${virtualAccountResult?.message || 'Missing KYC data'}`);
+        console.log('[WARN] Virtual account creation skipped - requires KYC verification');
       }
     } catch (vatErr) {
       // Virtual account creation failed but continue (non-critical)
@@ -227,6 +252,7 @@ const signup = async (req, res) => {
       user: {
         id: user._id,
         username: user.username,
+        wavvaTag: user.wavvaTag,
         email: user.email,
         phone: user.phone || '',
         firstName: user.firstName,
@@ -363,57 +389,6 @@ const adminLogin = async (req, res) => {
     });
   } catch (err) {
     logger.error('Admin login failed:', err.message);
-    res.status(500).json({ error: 'Login failed' });
-  }
-};
-
-// Customer Representative login
-const repLogin = async (req, res) => {
-  try {
-    const { email, password } = req.body;
-
-    // Validate input
-    if (!email || !password) {
-      return res.status(400).json({ error: 'Email and password required' });
-    }
-
-    // Find user by email
-    const user = await User.findOne({ email });
-    
-    if (!user) {
-      return res.status(401).json({ error: 'Invalid credentials' });
-    }
-
-    // Check if user is customer representative
-    if (user.role !== 'customer_rep' && !user.isAdmin) {
-      return res.status(401).json({ error: 'Not authorized as customer representative' });
-    }
-
-    // Verify password
-    const isPasswordValid = await user.comparePassword(password);
-    if (!isPasswordValid) {
-      return res.status(401).json({ error: 'Invalid credentials' });
-    }
-
-    // Generate token pair (access + refresh)
-    const { accessToken, refreshToken } = generateTokenPair(user._id);
-
-    res.json({
-      token: accessToken,
-      refreshToken,
-      rep: {
-        id: user._id,
-        email: user.email,
-        firstName: user.firstName,
-        lastName: user.lastName,
-        phone: user.phone || '',
-        role: user.role,
-        isAdmin: user.isAdmin,
-        createdAt: user.createdAt
-      }
-    });
-  } catch (err) {
-    logger.error('Rep login failed:', err.message);
     res.status(500).json({ error: 'Login failed' });
   }
 };
@@ -787,7 +762,6 @@ module.exports = {
   signup,
   login,
   adminLogin,
-  repLogin,
   googleSignIn,
   refreshTokens,
   sendOtpHandler,

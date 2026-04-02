@@ -1,5 +1,5 @@
-const WalletV2 = require('../models/WalletV2');
-const Ledger = require('../models/Ledger');
+const WalletV2 = require('../../models/WalletV2');
+const Ledger = require('../../models/Ledger');
 const { v4: uuidv4 } = require('uuid');
 
 class WalletService {

@@ -191,27 +191,27 @@ const TIER_LIMITS = {
   },
   TIER_1: {
     name: 'Basic KYC',
-    dailyLimit: 100000, // ₦100,000
-    monthlyLimit: 500000, // ₦500,000
-    walletBalanceLimit: 500000, // ₦500,000
-    singleTransactionLimit: 50000, // ₦50,000
-    description: 'Phone number, name, date of birth'
+    dailyLimit: 50000, // ₦50,000
+    monthlyLimit: 200000, // ₦200,000
+    walletBalanceLimit: 200000, // ₦200,000
+    singleTransactionLimit: 25000, // ₦25,000
+    description: 'Phone + Email, limited wallet access'
   },
   TIER_2: {
     name: 'Medium KYC',
-    dailyLimit: 1000000, // ₦1,000,000
-    monthlyLimit: 5000000, // ₦5,000,000
-    walletBalanceLimit: 5000000, // ₦5,000,000
-    singleTransactionLimit: 500000, // ₦500,000
-    description: 'BVN/NIN + Address verification'
+    dailyLimit: 2000000, // ₦2,000,000
+    monthlyLimit: 20000000, // ₦20,000,000
+    walletBalanceLimit: 20000000, // ₦20,000,000
+    singleTransactionLimit: 1000000, // ₦1,000,000
+    description: 'BVN (via Flutterwave or Alat) OR NIN, address'
   },
   TIER_3: {
     name: 'Full KYC',
-    dailyLimit: 10000000, // ₦10,000,000
-    monthlyLimit: 50000000, // ₦50,000,000
-    walletBalanceLimit: 50000000, // ₦50,000,000
-    singleTransactionLimit: 5000000, // ₦5,000,000
-    description: 'ID + Selfie + Address verification'
+    dailyLimit: 0, // 0 means unlimited by business rule
+    monthlyLimit: 0,
+    walletBalanceLimit: 0,
+    singleTransactionLimit: 0,
+    description: 'NIN + Face verification (Wema), unlimited transactions'
   }
 };
 
@@ -230,11 +230,11 @@ class KYCService {
 
   async submitTier1(userId, data) {
     try {
-      const { phoneNumber, firstName, lastName, dateOfBirth } = data;
+      const { phoneNumber, email, firstName, lastName, dateOfBirth } = data;
 
       // Validate required fields
-      if (!phoneNumber || !firstName || !lastName || !dateOfBirth) {
-        throw new Error('Missing required fields for Tier 1');
+      if (!phoneNumber || !email || !firstName || !lastName || !dateOfBirth) {
+        throw new Error('Missing required fields for Tier 1 (phone, email, firstName, lastName, dateOfBirth)');
       }
 
       let kycTier = await this.KYCTier.findOne({ userId });
@@ -249,6 +249,7 @@ class KYCService {
           value: phoneNumber,
           verified: false
         },
+        email,
         firstName,
         lastName,
         dateOfBirth: new Date(dateOfBirth),
@@ -317,7 +318,8 @@ class KYCService {
 
   isTier1Complete(kycTier) {
     return (
-      kycTier.tier1.phoneNumber.verified &&
+      kycTier.tier1.phoneNumber?.verified &&
+      kycTier.tier1.email &&
       kycTier.tier1.firstName &&
       kycTier.tier1.lastName &&
       kycTier.tier1.dateOfBirth
@@ -638,8 +640,8 @@ class KYCService {
 
       const limits = kycTier.transactionLimits;
 
-      // Check single transaction limit
-      if (amount > limits.singleTransactionLimit) {
+      // Check single transaction limit (0 = unlimited)
+      if (limits.singleTransactionLimit > 0 && amount > limits.singleTransactionLimit) {
         return {
           allowed: false,
           reason: `Amount exceeds single transaction limit of ₦${limits.singleTransactionLimit}`,
@@ -647,8 +649,8 @@ class KYCService {
         };
       }
 
-      // Check daily limit
-      if (limits.dailyUsed + amount > limits.dailyLimit) {
+      // Check daily limit (0 = unlimited)
+      if (limits.dailyLimit > 0 && limits.dailyUsed + amount > limits.dailyLimit) {
         const remaining = limits.dailyLimit - limits.dailyUsed;
         return {
           allowed: false,
@@ -657,8 +659,8 @@ class KYCService {
         };
       }
 
-      // Check monthly limit
-      if (limits.monthlyUsed + amount > limits.monthlyLimit) {
+      // Check monthly limit (0 = unlimited)
+      if (limits.monthlyLimit > 0 && limits.monthlyUsed + amount > limits.monthlyLimit) {
         const remaining = limits.monthlyLimit - limits.monthlyUsed;
         return {
           allowed: false,
@@ -764,6 +766,7 @@ class KYCService {
         name: 'Medium KYC',
         requirements: [
           'BVN (Bank Verification Number) OR NIN (National ID)',
+          'BVN can be verified via Flutterwave or Alat/Wema endpoint',
           'Complete address (street, city, state)',
           'Tier 1 must be completed'
         ],

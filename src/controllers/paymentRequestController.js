@@ -486,90 +486,6 @@ const recordPayment = async (req, res) => {
   }
 };
 
-// Create Paystack payment links for all participants
-const createPaymentLinks = async (req, res) => {
-  try {
-    const { requestId } = req.params;
-    const userId = req.userId;
-
-    const request = await PaymentRequest.findById(requestId)
-      .populate('requestedBy')
-      .populate('participants.userId');
-
-    if (!request) {
-      return res.status(404).json({ error: 'Payment request not found' });
-    }
-
-    if (!request.requestedBy._id.equals(userId)) {
-      return res.status(403).json({ error: 'Only requester can create payment links' });
-    }
-
-    const paymentLinks = [];
-
-    for (const participant of request.participants) {
-      if (participant.status === 'declined') continue;
-
-      try {
-        const amountInKobo = participant.dueAmount; // Already in cents, needs to be in kobo (lowest unit)
-        const metadata = {
-          paymentRequestId: requestId.toString(),
-          participantId: participant.userId._id.toString(),
-          type: 'split-payment'
-        };
-
-        // Note: This would require actual Paystack integration
-        // For now, we're creating the structure
-        const link = {
-          userId: participant.userId._id,
-          participantName: `${participant.userId.firstName} ${participant.userId.lastName}`,
-          dueAmount: amountInKobo / 100,
-          paymentUrl: `https://checkout.paystack.com/demo` // This would be actual payment link
-        };
-
-        request.paymentLinks.push({
-          userId: participant.userId._id,
-          paymentUrl: link.paymentUrl
-        });
-
-        paymentLinks.push(link);
-      } catch (error) {
-        logger.error(`Failed to create payment link for ${participant.userId._id}:`, error);
-      }
-    }
-
-    await request.save();
-
-    // Send payment links to participants
-    for (const participant of request.participants) {
-      if (participant.status !== 'declined') {
-        try {
-          await sendPaymentRequestNotification(
-            participant.userId._id,
-            userId,
-            requestId,
-            {
-              title: request.title,
-              amount: participant.dueAmount / 100,
-              paymentLink: request.paymentLinks.find(pl => pl.userId.equals(participant.userId._id))?.paymentUrl
-            }
-          );
-        } catch (error) {
-          logger.warn('Failed to send payment link notification:', error);
-        }
-      }
-    }
-
-    res.json({
-      success: true,
-      message: 'Payment links created and sent',
-      paymentLinks
-    });
-  } catch (error) {
-    logger.error('Error creating payment links:', error);
-    res.status(500).json({ error: 'Failed to create payment links' });
-  }
-};
-
 // Cancel a payment request
 const cancelPaymentRequest = async (req, res) => {
   try {
@@ -691,7 +607,6 @@ module.exports = {
   getPaymentRequest,
   respondToPaymentRequest,
   recordPayment,
-  createPaymentLinks,
   cancelPaymentRequest,
   getPaymentRequestAnalytics
 };

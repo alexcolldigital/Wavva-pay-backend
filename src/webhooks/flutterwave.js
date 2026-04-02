@@ -4,6 +4,7 @@ const Transaction = require('../models/Transaction');
 const Wallet = require('../models/Wallet');
 const MerchantTransaction = require('../models/MerchantTransaction');
 const MerchantWallet = require('../models/MerchantWallet');
+const TransactionService = require('../modules/transactions/transactionService');
 const logger = require('../utils/logger');
 const router = express.Router();
 
@@ -52,64 +53,62 @@ router.post('/flutterwave-payment', async (req, res) => {
 
     // Handle different event types
     if (event.event === 'charge.completed') {
-      // Payment successful
+      const reference = data.tx_ref;
       const transaction = await Transaction.findOne({
-        paystackReference: data.tx_ref
+        $or: [
+          { flutterwaveReference: reference },
+          { paystackReference: reference },
+          { 'metadata.providerReference': reference },
+          { 'metadata.reference': reference }
+        ]
       });
 
       if (!transaction) {
-        logger.warn(`Transaction not found for reference: ${data.tx_ref}`);
+        logger.warn(`Transaction not found for reference: ${reference}`);
         return res.json({ success: true }); // Accept the webhook anyway
       }
 
+      if (transaction.status === 'completed') {
+        logger.info(`Transaction already completed: ${transaction._id}`);
+        return res.json({ success: true });
+      }
+
       if (data.status === 'successful') {
-        // Update transaction status
-        transaction.status = 'completed';
-        transaction.paystackTransactionId = data.id;
-        transaction.metadata = { ...transaction.metadata, webhookData: data };
-        await transaction.save();
-
-        // Emit real-time update
-        emitTransactionUpdate(transaction, 'status_changed');
-
-        // Update wallet balance based on transaction type
-        if (transaction.type === 'wallet_funding') {
-          const wallet = await Wallet.findById(transaction.sender);
-          if (wallet && wallet.balance < transaction.amount) {
-            // Credit the wallet if not already done
-            wallet.balance += transaction.amount;
-            await wallet.save();
-          }
-        } else if (transaction.type === 'merchant_payment') {
-          // Credit merchant wallet
-          const merchantWallet = await MerchantWallet.findOne({
-            merchantId: transaction.receiver
+        try {
+          // Process settlement and funding pipeline
+          const settlementResult = await TransactionService.processWebhookSettlement({
+            reference,
+            amount: transaction.amount,
+            currency: transaction.currency,
+            provider: 'flutterwave',
+            providerReference: data.id,
+            status: 'successful',
+            metadata: { ...transaction.metadata, webhookData: data }
           });
-          if (merchantWallet) {
-            merchantWallet.balance += transaction.netAmount;
-            await merchantWallet.save();
-          }
-        }
 
-        logger.info(`✅ Transaction ${transaction._id} marked as completed`);
-      } else if (data.status === 'failed') {
-        // Payment failed
+          // If settlement result succeeded, mark transaction completed
+          transaction.status = 'completed';
+          transaction.flutterwaveTransactionId = data.id;
+          transaction.metadata = { ...transaction.metadata, webhookData: data };          
+          await transaction.save();
+          emitTransactionUpdate(transaction, 'status_changed');
+
+          logger.info(`✅ Transaction ${transaction._id} settled via webhook`);
+        } catch (err) {
+          logger.error('Webhook settlement processing error:', err);
+          return res.status(500).json({ success: false, error: err.message });
+        }
+      } else if (data.status === 'failed' || data.status === 'cancelled') {
         transaction.status = 'failed';
         transaction.failureReason = data.processor_response || 'Payment failed';
         transaction.metadata = { ...transaction.metadata, webhookData: data };
         await transaction.save();
 
-        // Refund wallet if wallet funding failed
-        if (transaction.type === 'wallet_funding') {
-          const wallet = await Wallet.findById(transaction.sender);
-          if (wallet) {
-            wallet.balance -= transaction.amount;
-            await wallet.save();
-          }
-        }
-
+        emitTransactionUpdate(transaction, 'status_changed');
         logger.warn(`❌ Transaction ${transaction._id} failed:`, data.processor_response);
       }
+
+      return res.json({ success: true });
     } else if (event.event === 'transfer.completed') {
       // Bank transfer completed
       const transaction = await Transaction.findOne({

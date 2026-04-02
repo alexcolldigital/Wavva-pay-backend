@@ -54,23 +54,43 @@ referralSchema.statics.generateReferralCode = function() {
 
 // Static method to get referral stats
 referralSchema.statics.getReferralStats = async function(userId) {
-  const stats = await this.aggregate([
-    { $match: { referrerId: mongoose.Types.ObjectId(userId) } },
-    {
-      $group: {
-        _id: '$status',
-        count: { $sum: 1 },
-        totalRewards: { $sum: '$rewardAmount' }
+  try {
+    // Convert userId to ObjectId if it's a string
+    const userObjectId = new mongoose.Types.ObjectId(userId);
+    
+    const stats = await this.aggregate([
+      { $match: { referrerId: userObjectId } },
+      {
+        $group: {
+          _id: '$status',
+          count: { $sum: 1 },
+          totalRewards: { $sum: '$rewardAmount' }
+        }
       }
-    }
-  ]);
+    ]);
 
-  return {
-    totalReferrals: stats.reduce((sum, stat) => sum + stat.count, 0),
-    completedReferrals: stats.find(s => s._id === 'completed')?.count || 0,
-    pendingReferrals: stats.find(s => s._id === 'pending')?.count || 0,
-    totalRewards: stats.find(s => s._id === 'completed')?.totalRewards || 0
-  };
+    return {
+      totalReferrals: stats.reduce((sum, stat) => sum + stat.count, 0),
+      completedReferrals: stats.find(s => s._id === 'completed')?.count || 0,
+      pendingReferrals: stats.find(s => s._id === 'pending')?.count || 0,
+      totalRewards: stats.find(s => s._id === 'completed')?.totalRewards || 0,
+      code: 'WAVVA' + Math.random().toString(36).substring(2, 8).toUpperCase(),
+      earnings: stats.find(s => s._id === 'completed')?.totalRewards || 0,
+      pendingRewards: stats.find(s => s._id === 'pending')?.totalRewards || 0
+    };
+  } catch (error) {
+    console.error('Error calculating referral stats:', error);
+    // Return default stats if there's an error
+    return {
+      totalReferrals: 0,
+      completedReferrals: 0,
+      pendingReferrals: 0,
+      totalRewards: 0,
+      code: 'WAVVA' + Math.random().toString(36).substring(2, 8).toUpperCase(),
+      earnings: 0,
+      pendingRewards: 0
+    };
+  }
 };
 
 module.exports = mongoose.model('Referral', referralSchema);

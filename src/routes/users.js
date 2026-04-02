@@ -11,6 +11,7 @@ const {
   checkUsername,
   setUsername,
   addFriend,
+  removeFriend,
   getFriends,
   getWallet,
   changePassword,
@@ -24,6 +25,8 @@ const {
   disable2FA,
   getLinkedDevices,
   removeLinkedDevice,
+  getWavvaTag,
+  updateWavvaTag,
 } = require('../controllers/usersController');
 
 const router = express.Router();
@@ -58,9 +61,19 @@ router.get('/search', authMiddleware, searchUsers);
 router.post('/check-username', authMiddleware, checkUsername);
 router.post('/set-username', authMiddleware, setUsername);
 
+// Wavva Tag management routes
+router.get('/wavva-tag', authMiddleware, getWavvaTag);
+router.put('/wavva-tag', authMiddleware, updateWavvaTag);
+
 // Friends management routes
+// POST /friends/add - Keep for backward compatibility
 router.post('/friends/add', authMiddleware, addFriend);
+// POST /friends - Primary route for mobile app
+router.post('/friends', authMiddleware, addFriend);
+// GET /friends - Get friends list
 router.get('/friends', authMiddleware, getFriends);
+// DELETE /friends/:friendId - Remove friend
+router.delete('/friends/:friendId', authMiddleware, removeFriend);
 
 // Wallet routes
 router.get('/wallet', authMiddleware, getWallet);

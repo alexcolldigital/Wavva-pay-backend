@@ -278,31 +278,110 @@ const setUsername = async (req, res) => {
 };
 
 // Add friend
+// Add friend using identifier (phone, username, email, or userId)
 const addFriend = async (req, res) => {
   try {
-    const { friendId } = req.body;
+    const { identifier, friendId } = req.body;
 
-    if (!friendId || friendId === req.userId) {
-      return res.status(400).json({ error: 'Invalid friend ID' });
+    if (!identifier && !friendId) {
+      return res.status(400).json({ error: 'Identifier or friendId is required' });
     }
 
-    const user = await User.findById(req.userId);
-    const friend = await User.findById(friendId);
+    const currentUser = await User.findById(req.userId);
+    if (!currentUser) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+
+    let friend;
+    
+    // If friendId is provided directly, use it
+    if (friendId) {
+      friend = await User.findById(friendId);
+    } else {
+      // Otherwise, lookup friend by identifier
+      const identifierLower = identifier.toLowerCase().trim();
+      
+      // Try to find by different identifiers
+      friend = await User.findOne({
+        $or: [
+          { _id: identifierLower },
+          { phone: identifierLower },
+          { email: identifierLower },
+          { username: identifierLower },
+          { wavvaTag: identifierLower.replace(/^#+/, '') }, // Remove # if present
+        ]
+      });
+    }
 
     if (!friend) {
       return res.status(404).json({ error: 'Friend not found' });
     }
 
-    if (user.friends.includes(friendId)) {
+    if (friend._id.toString() === req.userId) {
+      return res.status(400).json({ error: 'Cannot add yourself as friend' });
+    }
+
+    if (currentUser.friends.includes(friend._id)) {
       return res.status(400).json({ error: 'Already friends' });
     }
 
-    user.friends.push(friendId);
+    currentUser.friends.push(friend._id);
+    await currentUser.save();
+
+    // Populate friend details before returning
+    await currentUser.populate('friends', 'firstName lastName username profilePicture email phone wavvaTag');
+
+    res.json({ 
+      success: true,
+      message: 'Friend added successfully', 
+      friend: {
+        _id: friend._id,
+        firstName: friend.firstName,
+        lastName: friend.lastName,
+        username: friend.username,
+        email: friend.email,
+        phone: friend.phone,
+        wavvaTag: friend.wavvaTag,
+        profilePicture: friend.profilePicture,
+      }
+    });
+  } catch (err) {
+    console.error('Add friend error:', err);
+    res.status(500).json({ error: 'Failed to add friend' });
+  }
+};
+
+// Remove friend
+const removeFriend = async (req, res) => {
+  try {
+    const { friendId } = req.params;
+
+    if (!friendId) {
+      return res.status(400).json({ error: 'Friend ID is required' });
+    }
+
+    const user = await User.findById(req.userId);
+    if (!user) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+
+    // Check if friend exists in user's friends list
+    if (!user.friends.includes(friendId)) {
+      return res.status(400).json({ error: 'Friend not found in your friends list' });
+    }
+
+    // Remove friend
+    user.friends = user.friends.filter(id => id.toString() !== friendId);
     await user.save();
 
-    res.json({ message: 'Friend added successfully', friends: user.friends });
+    res.json({ 
+      success: true,
+      message: 'Friend removed successfully',
+      friendCount: user.friends.length
+    });
   } catch (err) {
-    res.status(500).json({ error: 'Failed to add friend' });
+    console.error('Remove friend error:', err);
+    res.status(500).json({ error: 'Failed to remove friend' });
   }
 };
 
@@ -630,6 +709,67 @@ const getLinkedDevices = async (req, res) => {
   }
 };
 
+// Get user's Wavva Tag
+const getWavvaTag = async (req, res) => {
+  try {
+    const user = await User.findById(req.userId).select('wavvaTag firstName lastName');
+
+    if (!user) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+
+    res.json({
+      success: true,
+      wavvaTag: user.wavvaTag,
+    });
+  } catch (err) {
+    console.error('Get Wavva Tag error:', err);
+    res.status(500).json({ error: 'Failed to get Wavva Tag' });
+  }
+};
+
+// Update user's Wavva Tag
+const updateWavvaTag = async (req, res) => {
+  try {
+    const { wavvaTag } = req.body;
+
+    if (!wavvaTag) {
+      return res.status(400).json({ error: 'Wavva Tag is required' });
+    }
+
+    // Import validations from wavvaTag utility
+    const { validateWavvaTag, isWavvaTagTaken } = require('../utils/wavvaTag');
+
+    const validation = validateWavvaTag(wavvaTag);
+    if (!validation.isValid) {
+      return res.status(400).json({ error: validation.error });
+    }
+
+    // Check if tag is already taken by another user
+    const isTaken = await isWavvaTagTaken(User, wavvaTag, req.userId);
+    if (isTaken) {
+      return res.status(409).json({ error: 'Wavva Tag already taken' });
+    }
+
+    const user = await User.findById(req.userId);
+    if (!user) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+
+    user.wavvaTag = wavvaTag.toLowerCase();
+    await user.save();
+
+    res.json({
+      success: true,
+      message: 'Wavva Tag updated successfully',
+      wavvaTag: user.wavvaTag,
+    });
+  } catch (err) {
+    console.error('Update Wavva Tag error:', err);
+    res.status(500).json({ error: 'Failed to update Wavva Tag' });
+  }
+};
+
 // Remove linked device
 const removeLinkedDevice = async (req, res) => {
   try {
@@ -656,6 +796,7 @@ module.exports = {
   checkUsername,
   setUsername,
   addFriend,
+  removeFriend,
   getFriends,
   getWallet,
   changePassword,
@@ -669,4 +810,6 @@ module.exports = {
   disable2FA,
   getLinkedDevices,
   removeLinkedDevice,
+  getWavvaTag,
+  updateWavvaTag,
 };

@@ -1,6 +1,6 @@
-const CommissionRule = require('../models/CommissionRule');
-const WalletService = require('./walletService');
-const Ledger = require('../models/Ledger');
+const CommissionRule = require('../../models/CommissionRule');
+const WalletService = require('../wallet/walletService');
+const Ledger = require('../../models/Ledger');
 
 class CommissionService {
   // Initialize default commission rules

@@ -13,7 +13,7 @@ const app = express();
 const server = http.createServer(app);
 
 // Connect to MongoDB
-const mongoURI = process.env.MONGODB_URI || 'mongodb://localhost:27017/wavva-pay';
+const mongoURI = process.env.MONGODB_URI || process.env.MONGO_URI || 'mongodb://localhost:27017/wavvapay';
 mongoose.connect(mongoURI)
   .then(() => {
     logger.info('✅ MongoDB connected successfully');
@@ -25,7 +25,8 @@ mongoose.connect(mongoURI)
 
 // Parse allowed origins from environment
 const getAllowedOrigins = () => {
-  const allowedOriginsEnv = process.env.ALLOWED_ORIGINS || 'http://localhost:5173,http://localhost:3001';
+  const allowedOriginsEnv = process.env.ALLOWED_ORIGINS || 
+    'http://localhost:3000,http://localhost:3001,http://localhost:5173,http://localhost:8081,http://localhost:8082,http://127.0.0.1:8081,http://127.0.0.1:8082';
   return allowedOriginsEnv.split(',').map(origin => origin.trim());
 };
 
@@ -86,14 +87,18 @@ app.use('/api/support', require('./routes/support'));
 app.use('/api/voice', require('./routes/voice'));
 app.use('/api/banking', require('./routes/banking'));
 app.use('/api/admin', require('./routes/admin'));
-app.use('/api/rep', require('./routes/rep'));
 
 // KYC Routes
 app.use('/api/kyc/user', require('./routes/userKYC'));
 app.use('/api/kyc/merchant', require('./routes/kyc'));
+app.use('/api/kyc-tiers', require('./routes/kyc-tiers'));
+
+// Document Upload Routes
+app.use('/api/documents', require('./routes/documents'));
 
 // Wema/ALAT Product Routes
-app.use('/api/wema/virtual-account', require('./routes/wema/virtualAccountRoutes'));
+// Virtual account is now handled via Flutterwave to support static permanent VA
+app.use('/api/flutterwave/virtual-account', require('./routes/wema/virtualAccountRoutes'));
 app.use('/api/wema/nip-transfer', require('./routes/wema/nipTransferRoutes'));
 app.use('/api/wema/account-verification', require('./routes/wema/accountVerificationRoutes'));
 app.use('/api/wema/bank-list', require('./routes/wema/bankListRoutes'));
@@ -108,7 +113,6 @@ app.use('/api/group-payments', require('./routes/groupPayments'));
 
 // Merchant Routes
 app.use('/api/merchant', require('./routes/merchant'));
-app.use('/api/merchant/payment-links', require('./routes/paymentLink'));
 app.use('/api/merchant/dashboard', require('./routes/merchantDashboard'));
 app.use('/api/merchant/settlement', require('./routes/settlement'));
 app.use('/api/merchant/subscriptions', require('./routes/subscriptions'));

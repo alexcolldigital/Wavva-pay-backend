@@ -8,6 +8,7 @@ const flutterwaveService = require('../services/flutterwave');
 const wemaService = require('../services/wema');
 const { calculateFee } = require('../utils/feeCalculator');
 const { recordCommission } = require('../services/commissionService');
+const { extractWavvaTagValue } = require('../utils/wavvaTag');
 
 // Send money P2P (internal transfer)
 const sendMoney = async (req, res) => {
@@ -46,13 +47,22 @@ const sendMoney = async (req, res) => {
       return res.status(400).json({ error: 'Sender user not found' });
     }
 
-    // Get receiver - either by ID or by username/identifier
+    // Get receiver - either by ID or by wavvaTag/username/identifier
     let receiverUser;
     if (receiverId) {
       receiverUser = await User.findById(receiverId);
     } else if (receiver) {
-      // Look up by username first (exact match)
-      receiverUser = await User.findOne({ username: receiver });
+      // Prioritize Wavva Tag lookup first (primary identifier for P2P)
+      // Check if receiver starts with # (wavva tag format)
+      const cleanReceiver = receiver.startsWith('#') ? extractWavvaTagValue(receiver) : receiver;
+      
+      // Try Wavva Tag first (exact match, case-insensitive)
+      receiverUser = await User.findOne({ wavvaTag: { $regex: `^#?${cleanReceiver}$`, $options: 'i' } });
+      
+      // Fall back to username (exact match)
+      if (!receiverUser) {
+        receiverUser = await User.findOne({ username: receiver });
+      }
       
       // If not found, try as MongoDB ObjectId
       if (!receiverUser && receiver.length === 24) {
@@ -63,10 +73,14 @@ const sendMoney = async (req, res) => {
         }
       }
 
-      // If still not found, try partial username match (case-insensitive)
+      // If still not found, try regex search (wavvaTag, username, phone)
       if (!receiverUser) {
         receiverUser = await User.findOne({
-          username: { $regex: receiver, $options: 'i' }
+          $or: [
+            { wavvaTag: { $regex: cleanReceiver, $options: 'i' } },
+            { username: { $regex: receiver, $options: 'i' } },
+            { phone: { $regex: receiver, $options: 'i' } }
+          ]
         });
       }
     }
@@ -114,8 +128,8 @@ const sendMoney = async (req, res) => {
     await transaction.save();
     
     // Populate sender and receiver details
-    await transaction.populate('sender', 'firstName lastName username profilePicture');
-    await transaction.populate('receiver', 'firstName lastName username profilePicture');
+    await transaction.populate('sender', 'firstName lastName username wavvaTag profilePicture');
+    await transaction.populate('receiver', 'firstName lastName username wavvaTag profilePicture');
     
     // Update balances
     senderWallet.balance -= totalDebit; // Deduct amount + fee from sender
@@ -180,7 +194,7 @@ const sendMoney = async (req, res) => {
   }
 };
 
-// Lookup user by username, phone, or userId for transfer
+// Lookup user by wavvaTag, username, phone, or userId for transfer
 const lookupUser = async (req, res) => {
   try {
     const { identifier } = req.params;
@@ -192,30 +206,44 @@ const lookupUser = async (req, res) => {
 
     console.log('Looking up user with identifier:', identifier);
 
-    // Try to match by exact username first, then phone, then userId
-    let user = await User.findOne({ username: identifier }).select('_id firstName lastName username phone email profilePicture accountStatus');
+    // Extract wavva tag value if starts with #
+    const cleanIdentifier = identifier.startsWith('#') ? extractWavvaTagValue(identifier) : identifier;
+
+    // Try Wavva Tag first (exact match, case-insensitive) - PRIMARY lookup
+    let user = await User.findOne({ wavvaTag: { $regex: `^#?${cleanIdentifier}$`, $options: 'i' } })
+      .select('_id firstName lastName username wavvaTag phone email profilePicture accountStatus');
     
+    // Fall back to exact username match
     if (!user) {
-      user = await User.findOne({ phone: identifier }).select('_id firstName lastName username phone email profilePicture accountStatus');
+      user = await User.findOne({ username: identifier })
+        .select('_id firstName lastName username wavvaTag phone email profilePicture accountStatus');
+    }
+
+    // Try phone number
+    if (!user) {
+      user = await User.findOne({ phone: identifier })
+        .select('_id firstName lastName username wavvaTag phone email profilePicture accountStatus');
     }
     
+    // Try as MongoDB ObjectId
     if (!user && identifier.length === 24) {
-      // Try as MongoDB ObjectId
       try {
-        user = await User.findById(identifier).select('_id firstName lastName username phone email profilePicture accountStatus');
+        user = await User.findById(identifier)
+          .select('_id firstName lastName username wavvaTag phone email profilePicture accountStatus');
       } catch (e) {
         // Invalid ObjectId format
       }
     }
     
+    // Try regex search for wavvaTag, username, and phone (case-insensitive)
     if (!user) {
-      // Try regex search for username and phone
       user = await User.findOne({
         $or: [
+          { wavvaTag: { $regex: cleanIdentifier, $options: 'i' } },
           { username: { $regex: identifier, $options: 'i' } },
           { phone: { $regex: identifier, $options: 'i' } }
         ]
-      }).select('_id firstName lastName username phone email profilePicture accountStatus');
+      }).select('_id firstName lastName username wavvaTag phone email profilePicture accountStatus');
     }
 
     console.log('User found:', user ? user._id : 'no user');
@@ -241,6 +269,7 @@ const lookupUser = async (req, res) => {
         firstName: user.firstName,
         lastName: user.lastName,
         username: user.username,
+        wavvaTag: user.wavvaTag,
         phone: user.phone,
         email: user.email,
         profilePicture: user.profilePicture
@@ -276,207 +305,368 @@ const getTransactionStatus = async (req, res) => {
   }
 };
 
-// Initialize Paystack payment for adding funds
+// Initialize wallet funding for Flutterwave hosted checkout
 const initializeFunding = async (req, res) => {
   try {
     const { amount, currency = 'NGN' } = req.body;
     const userId = req.userId;
 
-    // Validation
     if (!amount || amount <= 0) {
       return res.status(400).json({ error: 'Invalid amount' });
     }
 
-    // Validate currency (only NGN allowed for now)
-    if (currency !== 'NGN') {
-      return res.status(400).json({ 
-        error: 'Only NGN currency is supported for wallet funding' 
-      });
-    }
-
-    const user = await User.findById(userId);
-    if (!user) {
-      return res.status(404).json({ error: 'User not found' });
-    }
-
-    // For Flutterwave, we don't initialize remotely - card details come from frontend
-    // This endpoint now provides payment initialization instructions
-    const reference = `PAY-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
-    
-    res.json({
-      success: true,
-      message: 'Ready to accept card details. Send card details to /api/payments/fund/verify',
-      reference: reference,
-      email: user.email,
-      amount: amount,
-      currency: currency,
-      instructions: 'Send card details (pan, cvv, expiry, pin) to process payment via Flutterwave'
-    });
-  } catch (err) {
-    console.error('Fund initialization error:', err);
-    res.status(500).json({ error: 'Failed to initialize payment' });
-  }
-};
-
-// Verify/Process payment with Flutterwave (accepts card details and verifies payment)
-const verifyFunding = async (req, res) => {
-  try {
-    const { reference, cardDetails } = req.body;
-    const userId = req.userId;
-    const amount = req.body.amount || 0; // Amount that was being funded
-
-    console.log('🔍 Flutterwave payment processing started:', { userId, reference });
-
-    if (!reference) {
-      return res.status(400).json({ error: 'Payment reference required' });
+    if (!['NGN', 'USD'].includes(currency)) {
+      return res.status(400).json({ error: 'Unsupported currency. Use NGN or USD.' });
     }
 
     const user = await User.findById(userId).populate('walletId');
     if (!user) {
-      console.error('❌ User not found:', userId);
-      return res.status(404).json({ error: 'User not found' });
+      return res.status(404).json({ error: 'User not found'});
     }
 
     if (!user.walletId) {
-      console.error('❌ User wallet not found:', userId);
-      return res.status(404).json({ error: 'User wallet not found' });
+      return res.status(400).json({ error: 'User has no wallet attached.'});
     }
 
-    let verificationResult;
+    const txRef = `WVF-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+    const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:8081';
+    const redirectUrl = `${frontendUrl}/checkout/success?tx_ref=${txRef}`;
 
-    // If card details provided, charge via Flutterwave
-    if (cardDetails && cardDetails.pan && cardDetails.cvv && cardDetails.expiry && cardDetails.pin) {
-      console.log('💳 Processing card charge via Flutterwave...');
-      const amountInKobo = Math.round(amount * 100);
-      
-      // Split expiry (MMYY) into expiryMonth and expiryYear
-      const expiryMonth = cardDetails.expiry.substring(0, 2);
-      const expiryYear = '20' + cardDetails.expiry.substring(2, 4);
-      
-      const chargeResult = await flutterwaveService.initializeCardPayment(
-        {
-          cardNumber: cardDetails.pan,
-          cvv: cardDetails.cvv,
-          expiryMonth: expiryMonth,
-          expiryYear: expiryYear
-        },
-        amountInKobo / 100, // Convert to NGN
-        user.email,
-        user.phone,
-        { fullName: user.firstName + ' ' + user.lastName }
-      );
+    console.log('💰 Wallet Funding Initialize:', {
+      userId,
+      amount,
+      currency,
+      txRef,
+      redirectUrl
+    });
 
-      if (!chargeResult.success) {
-        return res.status(400).json({ 
-          error: 'Card charge failed',
-          message: chargeResult.error,
-          status: chargeResult.status 
-        });
+    const checkoutPayload = {
+      amount: Number(amount),
+      currency,
+      tx_ref: txRef,
+      redirectUrl,
+      paymentOptions: 'card,mobilemoney,ussd',
+      customer: {
+        email: user.email,
+        phonenumber: user.phone,
+        name: `${user.firstName || ''} ${user.lastName || ''}`.trim() || user.username,
+      },
+      customizations: {
+        title: 'Wavva Pay Wallet Funding',
+        description: 'Secure wallet funding using Flutterwave',
+        logo: `${frontendUrl}/logo.png`
+      },
+      metadata: {
+        userId: userId.toString(),
+        walletId: user.walletId.toString(),
+        reference: txRef
       }
+    };
 
-      verificationResult = chargeResult;
-    } else {
-      // Otherwise, verify existing reference via Flutterwave
-      console.log('🔍 Verifying existing payment reference...');
-      // Assuming reference is the Flutterwave transaction ID
-      verificationResult = await flutterwaveService.verifyPayment(reference);
-    }
+    const checkoutResponse = await flutterwaveService.createCheckoutSession(checkoutPayload);
 
-    console.log('✓ Flutterwave result:', verificationResult);
-
-    if (!verificationResult.success) {
-      console.error('❌ Payment processing failed:', verificationResult);
-      return res.status(400).json({ 
-        error: 'Payment processing failed',
-        message: verificationResult.error,
-        status: verificationResult.status 
+    if (!checkoutResponse.success) {
+      console.error('❌ Checkout Session Creation Failed:', checkoutResponse);
+      return res.status(500).json({
+        success: false,
+        error: 'Failed to create Flutterwave checkout session',
+        details: checkoutResponse.error || checkoutResponse.message
       });
     }
 
-    // Create transaction record
-    const amountInCents = Math.round(verificationResult.amount * 100);
-    const { feeAmount, netAmount, feePercentage } = calculateFee(amountInCents, 'NGN', 'wallet_funding');
-    
+    console.log('✅ Checkout Session Created:', {
+      txRef,
+      paymentUrl: checkoutResponse.checkoutUrl,
+      reference: checkoutResponse.reference
+    });
+
     const transaction = new Transaction({
       sender: userId,
-      receiver: null, // Self-funding
-      amount: amountInCents, // Store in cents
-      currency: verificationResult.currency || 'NGN',
-      feePercentage,
-      feeAmount,
-      netAmount,
+      amount: Math.round(Number(amount) * 100),
+      currency,
       type: 'wallet_funding',
-      status: 'completed',
+      status: 'pending',
       method: 'flutterwave',
-      paystackReference: verificationResult.reference,
-      paystackTransactionId: verificationResult.transactionId,
-      description: `Wallet funding via Flutterwave (${verificationResult.paymentMethod || 'card'})`,
+      flutterwaveReference: txRef,
+      metadata: {
+        providerReference: checkoutResponse.transactionRef || txRef,
+        userId: userId,
+        amount: Number(amount),
+      },
+      description: 'Wallet funding via Flutterwave hosted checkout'
     });
 
     await transaction.save();
 
-    // Update wallet balance (with fee deducted) - Use dual wallet system
-    const wallet = await Wallet.findById(user.walletId);
-    if (!wallet) {
-      console.error('❌ Wallet not found:', user.walletId);
-      return res.status(404).json({ error: 'Wallet not found' });
+    res.json({
+      success: true,
+      paymentUrl: checkoutResponse.checkoutUrl || checkoutResponse.paymentLink || checkoutResponse.link,
+      reference: txRef,
+      transactionId: transaction._id
+    });
+  } catch (err) {
+    console.error('Fund initialization error:', err);
+    res.status(500).json({ error: 'Failed to initialize payment', details: err.message });
+  }
+};
+
+// Verify wallet funding status (poll endpoint)
+const verifyFunding = async (req, res) => {
+  try {
+    let { reference } = req.body;
+    
+    if (!reference) {
+      return res.status(400).json({ error: 'Reference is required' });
     }
 
-    // Get or create currency-specific wallet (NGN only for now)
-    const currencyWallet = wallet.getOrCreateWallet('NGN');
-    const previousBalance = currencyWallet.balance;
-    const creditAmount = netAmount; // Credit only net amount (after fee)
-    
-    console.log('💰 Updating wallet balance:', {
-      userId,
-      currency: 'NGN',
-      previousBalance,
-      creditAmount,
-      newBalance: previousBalance + creditAmount
+    // Handle case where reference comes as an array (ensure it's a string)
+    if (Array.isArray(reference)) {
+      console.log('⚠️ Reference was array, converting to string:', reference);
+      reference = reference[0] || reference;
+    }
+
+    console.log('🔍 Verifying Wallet Funding:', { reference, type: typeof reference });
+
+    // Try multiple lookup strategies to find the transaction
+    let transaction = await Transaction.findOne({ 
+      $or: [
+        { flutterwaveReference: reference },
+        { 'metadata.reference': reference },
+        { 'metadata.providerReference': reference },
+        { 'metadata.txRef': reference }
+      ]
     });
     
-    // Update the currency-specific wallet balance
-    currencyWallet.balance += creditAmount;
-    
-    // IMPORTANT: Mark the wallets array as modified for Mongoose to detect the change
-    wallet.markModified('wallets');
-    
-    await wallet.save();
-
-    // Record commission to internal ledger
-    if (feeAmount > 0) {
-      await recordCommission({
-        transactionId: transaction._id,
-        amount: feeAmount,
-        currency: 'NGN',
-        source: 'wallet_funding',
-        fromUser: userId,
-        feePercentage,
-        grossAmount: amountInCents,
-        description: `Wallet funding commission via Flutterwave (${verificationResult.paymentMethod || 'card'})`
+    // Fallback: try to find by tx_ref in metadata as substring
+    if (!transaction) {
+      console.log('⚠️ Transaction not found by reference, trying substring match...');
+      transaction = await Transaction.findOne({
+        $or: [
+          { flutterwaveReference: { $regex: reference, $options: 'i' } },
+          { 'metadata.reference': { $regex: reference, $options: 'i' } }
+        ]
       });
     }
 
-    console.log(`✅ Wallet updated: ${userId} | Currency: NGN | Previous: ${previousBalance} | Gross: ${amountInCents} | Fee: ${feeAmount} | Net: ${creditAmount} | New: ${currencyWallet.balance}`);
+    if (!transaction) {
+      console.error('❌ Transaction not found for reference:', reference);
+      return res.status(404).json({ 
+        error: 'Transaction not found',
+        reference,
+        message: 'No wallet funding transaction found for this reference. Please check your reference ID.'
+      });
+    }
 
-    res.json({
-      success: true,
-      transactionId: transaction._id,
-      message: 'Funds added successfully',
-      payment: {
-        grossAmount: (amountInCents / 100).toFixed(2),
-        fee: {
-          percentage: feePercentage,
-          amount: (feeAmount / 100).toFixed(2)
-        },
-        netAmount: (creditAmount / 100).toFixed(2),
-        currency: 'NGN'
-      },
-      newBalance: currencyWallet.balance / 100,
+    console.log('📋 Transaction Found:', { 
+      id: transaction._id,
+      status: transaction.status, 
+      type: transaction.type,
+      amount: transaction.amount,
+      flutterwaveReference: transaction.flutterwaveReference 
     });
+
+    // If already completed, return immediately (STOP POLLING)
+    if (transaction.status === 'completed') {
+      console.log('✅ Transaction Already Completed:', transaction._id);
+      return res.json({
+        success: true,
+        status: 'completed',
+        transactionId: transaction._id,
+        amount: transaction.amount / 100,
+        currency: transaction.currency,
+        message: 'Payment completed successfully' // Signal to stop polling
+      });
+    }
+
+    // Cross-check with Flutterwave status to see if payment went through
+    try {
+      const flutterwaveId = transaction.flutterwaveTransactionId || transaction.flutterwaveReference || reference;
+      console.log('🔗 Verifying with Flutterwave ID:', flutterwaveId);
+      
+      const check = await flutterwaveService.verifyPayment(flutterwaveId);
+      
+      console.log('📊 Flutterwave check result:', {
+        success: check.success,
+        status: check.status,
+        error: check.error
+      });
+
+      // Handle different Flutterwave response scenarios
+      if (check.status === 'not_found') {
+        // Transaction not yet in Flutterwave system - user might not have completed payment
+        console.warn('⚠️ Transaction not found in Flutterwave - user may not have completed payment');
+        return res.json({
+          success: true,
+          status: 'incomplete',
+          message: 'Payment not confirmed by payment provider. Did you complete the payment on Flutterwave?',
+          transactionId: transaction._id,
+          amount: transaction.amount / 100,
+          currency: transaction.currency
+        });
+      }
+
+      if (check.status === 'error' || (check.error && !check.status)) {
+        // API error, return what we have
+        console.error('⚠️ Flutterwave API error:', check.error);
+        return res.json({
+          success: true,
+          status: transaction.status,
+          message: 'Unable to verify with payment provider. Your transaction is: ' + transaction.status,
+          error: check.error,
+          transactionId: transaction._id,
+          amount: transaction.amount / 100,
+          currency: transaction.currency
+        });
+      }
+
+      const remoteStatus = check.status;
+      console.log('🌐 Flutterwave Status:', remoteStatus, '| Success:', check.success);
+
+      // IMPORTANT: Reload transaction from DB to get latest status
+      // This prevents duplicate settlement calls if verifyFunding is called multiple times
+      const latestTransaction = await Transaction.findById(transaction._id);
+      console.log('📋 Latest transaction status from DB:', latestTransaction.status);
+      
+      // If Flutterwave says successful and webhook hasn't processed yet, trigger settlement
+      // Also check that another concurrent request hasn't already started settlement
+      if ((remoteStatus === 'successful' || check.success === true) && latestTransaction.status === 'pending') {
+        console.log('⚙️ Flutterwave confirms successful payment, processing settlement...');
+        
+        // CRITICAL: Mark as 'processing' immediately BEFORE settlement to prevent concurrent settlements
+        latestTransaction.status = 'processing';
+        await latestTransaction.save();
+        console.log('🔒 Transaction marked as "processing" - preventing concurrent settlement calls');
+        
+        // DEBUG: Log exactly what transaction we found and what we're sending to settlement
+        console.log('📋 SETTLEMENT DATA - Transaction found in verifyFunding:', {
+          transactionId: latestTransaction._id,
+          flutterwaveReference: latestTransaction.flutterwaveReference,
+          amount: latestTransaction.amount,
+          status: latestTransaction.status,
+          type: latestTransaction.type,
+          metadata: latestTransaction.metadata
+        });
+        
+        console.log('📤 SETTLEMENT DATA - Calling settlement with:', {
+          reference: latestTransaction.flutterwaveReference,
+          amount: latestTransaction.amount,
+          currency: latestTransaction.currency,
+          provider: 'flutterwave',
+          providerReference: check.transactionId || flutterwaveId
+        });
+        
+        let settlementSuccess = false;
+        let settlementError = null;
+
+        try {
+          // Trigger webhook settlement
+          const TransactionService = require('../modules/transactions/transactionService');
+          const settlementResult = await TransactionService.processWebhookSettlement({
+            reference: latestTransaction.flutterwaveReference,
+            amount: latestTransaction.amount,
+            currency: latestTransaction.currency,
+            provider: 'flutterwave',
+            providerReference: check.transactionId || flutterwaveId,
+            status: 'successful',
+            metadata: { verificationData: check }
+          });
+
+          settlementSuccess = settlementResult && settlementResult.success;
+          console.log('📦 Settlement Result:', settlementResult);
+        } catch (settlementErr) {
+          console.error('❌ Settlement processing error:', {
+            message: settlementErr.message,
+            stack: settlementErr.stack
+          });
+          settlementError = settlementErr.message;
+          // Continue anyway - we still want to mark transaction as completed
+        }
+
+        // Mark transaction as completed since Flutterwave confirmed successful payment
+        transaction.status = 'completed';
+        transaction.flutterwaveTransactionId = check.transactionId || flutterwaveId;
+        
+        // Store settlement result in metadata
+        if (!transaction.metadata) transaction.metadata = {};
+        transaction.metadata.settlementAttempt = {
+          timestamp: new Date(),
+          success: settlementSuccess,
+          error: settlementError
+        };
+        
+        try {
+          await transaction.save();
+          console.log('✅ Transaction marked as completed - settlement attempted:', {
+            settlementSuccess,
+            settlementError
+          });
+        } catch (saveErr) {
+          console.error('⚠️ Failed to save transaction status:', saveErr.message);
+        }
+
+        // Return appropriate response based on settlement outcome
+        if (settlementSuccess || !settlementError) {
+          return res.json({
+            success: true,
+            status: 'completed',
+            message: '✓ Wallet funded successfully!',
+            transactionId: transaction._id,
+            amount: transaction.amount / 100,
+            currency: transaction.currency,
+            settlementProcessed: true
+          });
+        } else {
+          // Settlement had issues but Flutterwave confirmed payment
+          return res.json({
+            success: true,
+            status: 'completed',
+            message: '⚠️ Payment confirmed but balance update is processing. Please refresh your wallet in a moment.',
+            transactionId: transaction._id,
+            amount: transaction.amount / 100,
+            currency: transaction.currency,
+            settlementWarning: settlementError
+          });
+        }
+      }
+
+      // If still pending after retry attempts, suggest user wait
+      if (remoteStatus === 'pending' || transaction.status === 'pending') {
+        return res.json({
+          success: true,
+          status: 'pending',
+          message: 'Payment is still being processed by your bank',
+          remoteStatus,
+          transactionId: transaction._id,
+          amount: transaction.amount / 100,
+          currency: transaction.currency
+        });
+      }
+
+      return res.json({
+        success: true,
+        status: transaction.status,
+        remoteStatus: remoteStatus || 'unknown',
+        transactionId: transaction._id,
+        amount: transaction.amount / 100,
+        currency: transaction.currency
+      });
+    } catch (checkErr) {
+      console.error('❌ Flutterwave verification caught error:', checkErr.message);
+      console.log('💾 Transaction status is still:', transaction.status);
+      
+      return res.json({
+        success: true,
+        status: transaction.status,
+        message: 'Could not verify with payment provider. Your transaction status is: ' + transaction.status,
+        error: checkErr.message,
+        transactionId: transaction._id,
+        amount: transaction.amount / 100,
+        currency: transaction.currency
+      });
+    }
   } catch (err) {
-    console.error('Fund verification error:', err);
-    res.status(500).json({ error: 'Failed to verify payment' });
+    console.error('Verify funding error:', err);
+    res.status(500).json({ error: 'Failed to verify funding status', details: err.message });
   }
 };
 
@@ -1046,8 +1236,8 @@ const sendMoneyViaNFC = async (req, res) => {
     await transaction.save();
     
     // Populate sender and receiver details
-    await transaction.populate('sender', 'firstName lastName username profilePicture');
-    await transaction.populate('receiver', 'firstName lastName username profilePicture');
+    await transaction.populate('sender', 'firstName lastName username wavvaTag profilePicture');
+    await transaction.populate('receiver', 'firstName lastName username wavvaTag profilePicture');
     
     // Update balances
     senderWallet.balance -= totalDebit; // Deduct amount + fee from sender
