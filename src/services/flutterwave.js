@@ -391,7 +391,7 @@ const payBill = async (billerId, customerReference, amount, metadata = {}) => {
   try {
     const payload = {
       country: 'NG',
-      customer_id: customerReference,
+      customer: customerReference,
       amount: Math.round(amount),
       type: billerId,
       reference: `BILL-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`
@@ -444,7 +444,7 @@ const buyAirtime = async (networkCode, phoneNumber, amount, metadata = {}) => {
 
     const payload = {
       country: 'NG',
-      customer_id: phoneNumber,
+      customer: phoneNumber,
       amount: Math.round(amount),
       type: billerId,
       reference: `AIRTIME-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`
@@ -498,7 +498,7 @@ const buyDataBundle = async (networkCode, phoneNumber, dataPlanId, amount, metad
 
     const payload = {
       country: 'NG',
-      customer_id: phoneNumber,
+      customer: phoneNumber,
       amount: Math.round(amount),
       type: billerId,
       reference: `DATA-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`

@@ -28,17 +28,23 @@ router.get('/tier1/requirements', auth, async (req, res) => {
 // Submit Tier 1 KYC
 router.post('/tier1/submit', auth, async (req, res) => {
   try {
+    logger.info('Tier 1 submit route called, userId:', req.userId);
+    
     const { phoneNumber, email, firstName, lastName, dateOfBirth } = req.body;
+
+    logger.info('Request body:', { phoneNumber, email, firstName, lastName, dateOfBirth });
 
     // Validate input
     if (!phoneNumber || !email || !firstName || !lastName || !dateOfBirth) {
+      logger.warn('Missing required fields');
       return res.status(400).json({
         success: false,
         error: 'Missing required fields: phoneNumber, email, firstName, lastName, dateOfBirth'
       });
     }
 
-    const result = await kycService.submitTier1(req.user.id, {
+    logger.info('Calling kycService.submitTier1 with userId:', req.userId);
+    const result = await kycService.submitTier1(req.userId, {
       phoneNumber,
       email,
       firstName,
@@ -46,13 +52,15 @@ router.post('/tier1/submit', auth, async (req, res) => {
       dateOfBirth
     });
 
+    logger.info('Tier 1 submission successful, result:', result);
+
     res.json({
       success: true,
       message: result.message,
       data: result
     });
   } catch (err) {
-    logger.error('Tier 1 submission error:', err.message);
+    logger.error('Tier 1 submission error in route:', err.message, err.stack);
     res.status(500).json({
       success: false,
       error: err.message
@@ -72,7 +80,7 @@ router.post('/tier1/verify-phone', auth, async (req, res) => {
       });
     }
 
-    const result = await kycService.verifyTier1PhoneNumber(req.user.id, phoneNumber, otp);
+    const result = await kycService.verifyTier1PhoneNumber(req.userId, phoneNumber, otp);
 
     res.json({
       success: true,
@@ -129,7 +137,7 @@ router.post('/tier2/submit', auth, async (req, res) => {
       });
     }
 
-    const result = await kycService.submitTier2(req.user.id, {
+    const result = await kycService.submitTier2(req.userId, {
       bvn,
       nin,
       address
@@ -161,7 +169,7 @@ router.post('/tier2/verify-bvn', auth, async (req, res) => {
       });
     }
 
-    const result = await kycService.verifyTier2BVN(req.user.id, bvn, firstName, lastName);
+    const result = await kycService.verifyTier2BVN(req.userId, bvn, firstName, lastName);
 
     res.json({
       success: true,
@@ -189,7 +197,7 @@ router.post('/tier2/verify-nin', auth, async (req, res) => {
       });
     }
 
-    const result = await kycService.verifyTier2NIN(req.user.id, nin, firstName, lastName);
+    const result = await kycService.verifyTier2NIN(req.userId, nin, firstName, lastName);
 
     res.json({
       success: true,
@@ -247,7 +255,7 @@ router.post('/tier3/submit', auth, async (req, res) => {
       });
     }
 
-    const result = await kycService.submitTier3(req.user.id, {
+    const result = await kycService.submitTier3(req.userId, {
       idType,
       idNumber,
       idDocumentUrl,
@@ -289,7 +297,7 @@ router.post('/tier3/verify-face', auth, async (req, res) => {
     }
 
     const result = await kycService.verifyTier3FaceMatch(
-      req.user.id,
+      req.userId,
       livenessScore,
       matchScore
     );
@@ -315,7 +323,7 @@ router.post('/tier3/verify-face', auth, async (req, res) => {
 // Get current KYC status
 router.get('/status', auth, async (req, res) => {
   try {
-    const status = await kycService.getKYCStatus(req.user.id);
+    const status = await kycService.getKYCStatus(req.userId);
 
     res.json({
       success: true,
@@ -370,7 +378,7 @@ router.post('/check-transaction', auth, async (req, res) => {
       });
     }
 
-    const result = await kycService.checkTransactionAllowed(req.user.id, amount);
+    const result = await kycService.checkTransactionAllowed(req.userId, amount);
 
     res.json({
       success: true,
@@ -388,7 +396,7 @@ router.post('/check-transaction', auth, async (req, res) => {
 // Get current transaction limits
 router.get('/limits', auth, async (req, res) => {
   try {
-    const status = await kycService.getKYCStatus(req.user.id);
+    const status = await kycService.getKYCStatus(req.userId);
 
     res.json({
       success: true,
@@ -414,7 +422,7 @@ router.get('/limits', auth, async (req, res) => {
 // Get risk profile
 router.get('/risk-profile', auth, async (req, res) => {
   try {
-    const riskProfile = await kycService.getRiskProfile(req.user.id);
+    const riskProfile = await kycService.getRiskProfile(req.userId);
 
     res.json({
       success: true,

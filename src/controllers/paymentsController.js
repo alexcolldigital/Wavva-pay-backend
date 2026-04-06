@@ -264,7 +264,7 @@ const lookupUser = async (req, res) => {
 
     res.json({
       success: true,
-      user: {
+      data: {
         _id: user._id,
         firstName: user.firstName,
         lastName: user.lastName,
@@ -1304,12 +1304,12 @@ const sendMoneyViaNFC = async (req, res) => {
 
 const payBillEndpoint = async (req, res) => {
   try {
-    const { providerId, accountNumber, amount } = req.body;
+    const { category, amount, networkCode, phoneNumber, providerId, meterNumber, meterType, smartCardNumber, accountNumber } = req.body;
     const userId = req.userId;
 
-    if (!providerId || !accountNumber || !amount) {
+    if (!category || !amount) {
       return res.status(400).json({ 
-        error: 'Missing required fields: providerId, accountNumber, amount' 
+        error: 'Missing required fields: category, amount' 
       });
     }
 
@@ -1333,12 +1333,44 @@ const payBillEndpoint = async (req, res) => {
       });
     }
 
-    // Process bill payment via Flutterwave
-    const billResult = await flutterwaveService.payBill(providerId, accountNumber, amountInKobo, {
-      email: user.email,
-      phone: user.phone,
-      description: `Bill payment for account ${accountNumber}`
-    });
+    let billResult;
+
+    // Process bill payment via Wema Bills Platform
+    if (category === 'airtime') {
+      billResult = await wemaService.buyAirtime(networkCode, phoneNumber, amountInKobo, {
+        customerId: userId,
+        email: user.email,
+        phone: phoneNumber
+      });
+    } else if (category === 'data') {
+      billResult = await wemaService.buyDataBundle(networkCode, phoneNumber, '1GB', amountInKobo, {
+        customerId: userId,
+        email: user.email,
+        phone: phoneNumber
+      });
+    } else if (category === 'electricity') {
+      billResult = await wemaService.payElectricityBill(providerId || 'EKO_ELECTRICITY', meterNumber, meterType || 'prepaid', amountInKobo, {
+        customerId: userId,
+        email: user.email
+      });
+    } else if (category === 'cable') {
+      billResult = await wemaService.payCableTVBill(providerId || 'DSTV', smartCardNumber, amountInKobo, {
+        customerId: userId,
+        email: user.email
+      });
+    } else if (category === 'water') {
+      billResult = await wemaService.payWaterBill(providerId || 'LAGOS_WATER', accountNumber, amountInKobo, {
+        customerId: userId,
+        email: user.email
+      });
+    } else if (category === 'internet') {
+      billResult = await wemaService.payInternetBill(providerId || 'SMILE', accountNumber, amountInKobo, {
+        customerId: userId,
+        email: user.email
+      });
+    } else {
+      return res.status(400).json({ error: 'Unsupported bill category' });
+    }
 
     if (!billResult.success) {
       return res.status(400).json({ 
@@ -1354,13 +1386,29 @@ const payBillEndpoint = async (req, res) => {
       amount: amountInKobo,
       currency: 'NGN',
       type: 'bill_payment',
-      method: 'flutterwave',
+      method: 'wema',
       status: billResult.status === 'success' ? 'completed' : 'pending',
       paystackReference: billResult.reference,
       metadata: {
-        providerId: providerId,
-        accountNumber: accountNumber,
-        billType: 'utility'
+        category: category,
+        amount: amount,
+        ...(category === 'airtime' || category === 'data' ? {
+          networkCode: networkCode,
+          phoneNumber: phoneNumber
+        } : {}),
+        ...(category === 'electricity' ? {
+          providerId: providerId,
+          meterNumber: meterNumber,
+          meterType: meterType
+        } : {}),
+        ...(category === 'cable' ? {
+          providerId: providerId,
+          smartCardNumber: smartCardNumber
+        } : {}),
+        ...(category === 'water' || category === 'internet' ? {
+          providerId: providerId,
+          accountNumber: accountNumber
+        } : {})
       }
     });
 
@@ -1380,7 +1428,7 @@ const payBillEndpoint = async (req, res) => {
       type: 'bill_payment',
       amount: amountInKobo,
       commission: commission,
-      method: 'flutterwave',
+      method: 'wema',
       status: 'recorded'
     });
 
@@ -1391,6 +1439,7 @@ const payBillEndpoint = async (req, res) => {
       transactionId: transaction._id,
       reference: billResult.reference,
       amount: amount,
+      category: category,
       currency: 'NGN',
       status: transaction.status,
       newBalance: user.walletId.balance / 100,
@@ -1434,11 +1483,11 @@ const buyAirtimeEndpoint = async (req, res) => {
       });
     }
 
-    // Process airtime purchase via Flutterwave
-    const airtimeResult = await flutterwaveService.buyAirtime(networkCode, phoneNumber, amount, {
+    // Process airtime purchase via Wema
+    const airtimeResult = await wemaService.buyAirtime(networkCode, phoneNumber, amountInKobo, {
       email: user.email,
       phone: phoneNumber,
-      description: `Airtime purchase for ${phoneNumber}`
+      customerId: userId
     });
 
     if (!airtimeResult.success) {
@@ -1455,7 +1504,7 @@ const buyAirtimeEndpoint = async (req, res) => {
       amount: amountInKobo,
       currency: 'NGN',
       type: 'airtime',
-      method: 'flutterwave',
+      method: 'wema',
       status: airtimeResult.status === 'success' ? 'completed' : 'pending',
       paystackReference: airtimeResult.reference,
       metadata: {
@@ -1481,7 +1530,7 @@ const buyAirtimeEndpoint = async (req, res) => {
       type: 'airtime',
       amount: amountInKobo,
       commission: commission,
-      method: 'flutterwave',
+      method: 'wema',
       status: 'recorded'
     });
 
@@ -1537,11 +1586,11 @@ const buyDataBundleEndpoint = async (req, res) => {
       });
     }
 
-    // Process data purchase via Flutterwave
-    const dataResult = await buyDataBundle(networkCode, phoneNumber, dataPlanId, amountInKobo, {
+    // Process data purchase via Wema
+    const dataResult = await wemaService.buyDataBundle(networkCode, phoneNumber, dataPlanId, amountInKobo, {
       email: user.email,
       phone: phoneNumber,
-      description: `Data bundle ${dataPlanId} for ${phoneNumber}`
+      customerId: userId
     });
 
     if (!dataResult.success) {
@@ -1558,8 +1607,8 @@ const buyDataBundleEndpoint = async (req, res) => {
       amount: amountInKobo,
       currency: 'NGN',
       type: 'data_bundle',
-      method: 'flutterwave',
-      status: dataResult.status === 'Successful' ? 'completed' : 'pending',
+      method: 'wema',
+      status: dataResult.status === 'success' ? 'completed' : 'pending',
       paystackReference: dataResult.reference,
       metadata: {
         networkCode: networkCode,
@@ -1585,7 +1634,7 @@ const buyDataBundleEndpoint = async (req, res) => {
       type: 'data_bundle',
       amount: amountInKobo,
       commission: commission,
-      method: 'onepipe',
+      method: 'wema',
       status: 'recorded'
     });
 
@@ -1619,20 +1668,19 @@ const getDataPlansEndpoint = async (req, res) => {
       return res.status(400).json({ error: 'networkCode query parameter is required' });
     }
 
-    const dataPlans = getDataPlans(networkCode);
+    const plans = await wemaService.getDataPlans(networkCode);
 
-    if (dataPlans.length === 0) {
+    if (!plans.success) {
       return res.status(400).json({ 
-        error: 'Network not supported',
-        supportedNetworks: ['MTN', 'GLO', 'AIRTEL', '9MOBILE']
+        error: plans.error || 'Failed to fetch data plans'
       });
     }
 
     res.json({
       success: true,
       network: networkCode,
-      plans: dataPlans,
-      count: dataPlans.length
+      plans: plans.plans,
+      count: plans.count
     });
   } catch (err) {
     console.error('Get data plans error:', err);
@@ -1645,30 +1693,28 @@ const getBillProvidersEndpoint = async (req, res) => {
   try {
     const { category } = req.query;
 
-    const billProviders = getBillProviders();
+    const providers = await wemaService.getBillProviders(category);
+
+    if (!providers.success) {
+      return res.status(400).json({ 
+        error: providers.error || 'Failed to fetch bill providers'
+      });
+    }
 
     if (category) {
-      const providers = billProviders[category];
-      if (!providers) {
-        return res.status(400).json({ 
-          error: 'Category not found',
-          supportedCategories: Object.keys(billProviders)
-        });
-      }
-
       return res.json({
         success: true,
         category: category,
-        providers: providers,
-        count: providers.length
+        providers: providers.providers,
+        count: providers.count
       });
     }
 
     // Return all providers by category
     res.json({
       success: true,
-      providers: billProviders,
-      categories: Object.keys(billProviders)
+      providers: providers.providers,
+      categories: ['airtime', 'data', 'electricity', 'cable', 'water', 'internet']
     });
   } catch (err) {
     console.error('Get bill providers error:', err);

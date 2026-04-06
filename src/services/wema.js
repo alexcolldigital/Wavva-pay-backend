@@ -788,8 +788,439 @@ const initiateAccountLinking = async (customerId) => {
 };
 
 // ============================================
-// Transaction Monitoring Functions
+// Bill Payment Functions (Wema Bills Platform)
 // ============================================
+
+/**
+ * Buy airtime
+ * @param {string} networkCode - Network code (MTN, GLO, AIRTEL, 9MOBILE)
+ * @param {string} phoneNumber - Phone number to buy airtime for
+ * @param {number} amount - Amount in kobo
+ * @param {object} metadata - Additional metadata
+ * @returns {object} - Airtime purchase result
+ */
+const buyAirtime = async (networkCode, phoneNumber, amount, metadata = {}) => {
+  try {
+    // Map network codes to Wema provider codes
+    const networkMappings = {
+      'MTN': 'MTN',
+      'GLO': 'GLO',
+      'AIRTEL': 'AIRTEL',
+      '9MOBILE': '9MOBILE',
+      'mtn': 'MTN',
+      'glo': 'GLO',
+      'airtel': 'AIRTEL',
+      '9mobile': '9MOBILE'
+    };
+
+    const providerCode = networkMappings[networkCode] || networkCode.toUpperCase();
+
+    const payload = {
+      provider: providerCode,
+      phoneNumber: phoneNumber,
+      amount: Math.round(amount / 100), // Convert from kobo to naira
+      customerId: metadata.customerId || phoneNumber,
+      reference: `AIRTIME-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
+      metadata: {
+        network: networkCode,
+        serviceType: 'airtime',
+        ...metadata
+      }
+    };
+
+    const result = await makeWemaRequest('POST', 'bills/airtime', payload);
+
+    if (result.success) {
+      return {
+        success: true,
+        reference: result.data.reference || payload.reference,
+        transactionId: result.data.transactionId || result.data.id,
+        status: 'success',
+        amount: amount,
+        phoneNumber: phoneNumber,
+        network: networkCode,
+        message: result.message || `Airtime purchase successful for ${phoneNumber}`
+      };
+    } else {
+      return {
+        success: false,
+        error: result.error || result.message,
+        status: result.status
+      };
+    }
+  } catch (err) {
+    logger.error('Wema buyAirtime error:', err.message);
+    return {
+      success: false,
+      error: 'Airtime purchase failed: ' + err.message
+    };
+  }
+};
+
+/**
+ * Buy data bundle
+ * @param {string} networkCode - Network code (MTN, GLO, AIRTEL, 9MOBILE)
+ * @param {string} phoneNumber - Phone number to buy data for
+ * @param {string} dataPlanId - Data plan identifier
+ * @param {number} amount - Amount in kobo
+ * @param {object} metadata - Additional metadata
+ * @returns {object} - Data bundle purchase result
+ */
+const buyDataBundle = async (networkCode, phoneNumber, dataPlanId, amount, metadata = {}) => {
+  try {
+    // Map network codes to Wema provider codes
+    const networkMappings = {
+      'MTN': 'MTN',
+      'GLO': 'GLO',
+      'AIRTEL': 'AIRTEL',
+      '9MOBILE': '9MOBILE',
+      'mtn': 'MTN',
+      'glo': 'GLO',
+      'airtel': 'AIRTEL',
+      '9mobile': '9MOBILE'
+    };
+
+    const providerCode = networkMappings[networkCode] || networkCode.toUpperCase();
+
+    const payload = {
+      provider: providerCode,
+      phoneNumber: phoneNumber,
+      dataPlanId: dataPlanId,
+      amount: Math.round(amount / 100), // Convert from kobo to naira
+      customerId: metadata.customerId || phoneNumber,
+      reference: `DATA-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
+      metadata: {
+        network: networkCode,
+        dataPlan: dataPlanId,
+        serviceType: 'data',
+        ...metadata
+      }
+    };
+
+    const result = await makeWemaRequest('POST', 'bills/data', payload);
+
+    if (result.success) {
+      return {
+        success: true,
+        reference: result.data.reference || payload.reference,
+        transactionId: result.data.transactionId || result.data.id,
+        status: 'success',
+        amount: amount,
+        phoneNumber: phoneNumber,
+        network: networkCode,
+        dataPlan: dataPlanId,
+        message: result.message || `Data bundle ${dataPlanId} purchase successful for ${phoneNumber}`
+      };
+    } else {
+      return {
+        success: false,
+        error: result.error || result.message,
+        status: result.status
+      };
+    }
+  } catch (err) {
+    logger.error('Wema buyDataBundle error:', err.message);
+    return {
+      success: false,
+      error: 'Data bundle purchase failed: ' + err.message
+    };
+  }
+};
+
+/**
+ * Pay electricity bill
+ * @param {string} providerId - Electricity provider ID (e.g., EKO_ELECTRICITY, IKEJA_ELECTRICITY)
+ * @param {string} meterNumber - Meter number
+ * @param {string} meterType - Meter type (prepaid/postpaid)
+ * @param {number} amount - Amount in kobo
+ * @param {object} metadata - Additional metadata
+ * @returns {object} - Electricity bill payment result
+ */
+const payElectricityBill = async (providerId, meterNumber, meterType, amount, metadata = {}) => {
+  try {
+    const payload = {
+      provider: providerId,
+      meterNumber: meterNumber,
+      meterType: meterType || 'prepaid',
+      amount: Math.round(amount / 100), // Convert from kobo to naira
+      customerId: metadata.customerId || meterNumber,
+      reference: `ELECTRICITY-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
+      metadata: {
+        provider: providerId,
+        meterNumber: meterNumber,
+        meterType: meterType,
+        serviceType: 'electricity',
+        ...metadata
+      }
+    };
+
+    const result = await makeWemaRequest('POST', 'bills/electricity', payload);
+
+    if (result.success) {
+      return {
+        success: true,
+        reference: result.data.reference || payload.reference,
+        transactionId: result.data.transactionId || result.data.id,
+        status: 'success',
+        amount: amount,
+        meterNumber: meterNumber,
+        provider: providerId,
+        meterType: meterType,
+        token: result.data.token, // Electricity token if applicable
+        message: result.message || `Electricity bill payment successful for meter ${meterNumber}`
+      };
+    } else {
+      return {
+        success: false,
+        error: result.error || result.message,
+        status: result.status
+      };
+    }
+  } catch (err) {
+    logger.error('Wema payElectricityBill error:', err.message);
+    return {
+      success: false,
+      error: 'Electricity bill payment failed: ' + err.message
+    };
+  }
+};
+
+/**
+ * Pay cable TV bill
+ * @param {string} providerId - Cable provider ID (DSTV, GOTV, STARTIMES)
+ * @param {string} smartCardNumber - Smart card number
+ * @param {number} amount - Amount in kobo
+ * @param {object} metadata - Additional metadata
+ * @returns {object} - Cable TV bill payment result
+ */
+const payCableTVBill = async (providerId, smartCardNumber, amount, metadata = {}) => {
+  try {
+    const payload = {
+      provider: providerId,
+      smartCardNumber: smartCardNumber,
+      amount: Math.round(amount / 100), // Convert from kobo to naira
+      customerId: metadata.customerId || smartCardNumber,
+      reference: `CABLE-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
+      metadata: {
+        provider: providerId,
+        smartCardNumber: smartCardNumber,
+        serviceType: 'cable',
+        ...metadata
+      }
+    };
+
+    const result = await makeWemaRequest('POST', 'bills/cable', payload);
+
+    if (result.success) {
+      return {
+        success: true,
+        reference: result.data.reference || payload.reference,
+        transactionId: result.data.transactionId || result.data.id,
+        status: 'success',
+        amount: amount,
+        smartCardNumber: smartCardNumber,
+        provider: providerId,
+        message: result.message || `Cable TV bill payment successful for ${smartCardNumber}`
+      };
+    } else {
+      return {
+        success: false,
+        error: result.error || result.message,
+        status: result.status
+      };
+    }
+  } catch (err) {
+    logger.error('Wema payCableTVBill error:', err.message);
+    return {
+      success: false,
+      error: 'Cable TV bill payment failed: ' + err.message
+    };
+  }
+};
+
+/**
+ * Pay water bill
+ * @param {string} providerId - Water provider ID
+ * @param {string} accountNumber - Account number
+ * @param {number} amount - Amount in kobo
+ * @param {object} metadata - Additional metadata
+ * @returns {object} - Water bill payment result
+ */
+const payWaterBill = async (providerId, accountNumber, amount, metadata = {}) => {
+  try {
+    const payload = {
+      provider: providerId,
+      accountNumber: accountNumber,
+      amount: Math.round(amount / 100), // Convert from kobo to naira
+      customerId: metadata.customerId || accountNumber,
+      reference: `WATER-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
+      metadata: {
+        provider: providerId,
+        accountNumber: accountNumber,
+        serviceType: 'water',
+        ...metadata
+      }
+    };
+
+    const result = await makeWemaRequest('POST', 'bills/water', payload);
+
+    if (result.success) {
+      return {
+        success: true,
+        reference: result.data.reference || payload.reference,
+        transactionId: result.data.transactionId || result.data.id,
+        status: 'success',
+        amount: amount,
+        accountNumber: accountNumber,
+        provider: providerId,
+        message: result.message || `Water bill payment successful for account ${accountNumber}`
+      };
+    } else {
+      return {
+        success: false,
+        error: result.error || result.message,
+        status: result.status
+      };
+    }
+  } catch (err) {
+    logger.error('Wema payWaterBill error:', err.message);
+    return {
+      success: false,
+      error: 'Water bill payment failed: ' + err.message
+    };
+  }
+};
+
+/**
+ * Pay internet bill
+ * @param {string} providerId - Internet provider ID
+ * @param {string} accountNumber - Account number
+ * @param {number} amount - Amount in kobo
+ * @param {object} metadata - Additional metadata
+ * @returns {object} - Internet bill payment result
+ */
+const payInternetBill = async (providerId, accountNumber, amount, metadata = {}) => {
+  try {
+    const payload = {
+      provider: providerId,
+      accountNumber: accountNumber,
+      amount: Math.round(amount / 100), // Convert from kobo to naira
+      customerId: metadata.customerId || accountNumber,
+      reference: `INTERNET-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
+      metadata: {
+        provider: providerId,
+        accountNumber: accountNumber,
+        serviceType: 'internet',
+        ...metadata
+      }
+    };
+
+    const result = await makeWemaRequest('POST', 'bills/internet', payload);
+
+    if (result.success) {
+      return {
+        success: true,
+        reference: result.data.reference || payload.reference,
+        transactionId: result.data.transactionId || result.data.id,
+        status: 'success',
+        amount: amount,
+        accountNumber: accountNumber,
+        provider: providerId,
+        message: result.message || `Internet bill payment successful for account ${accountNumber}`
+      };
+    } else {
+      return {
+        success: false,
+        error: result.error || result.message,
+        status: result.status
+      };
+    }
+  } catch (err) {
+    logger.error('Wema payInternetBill error:', err.message);
+    return {
+      success: false,
+      error: 'Internet bill payment failed: ' + err.message
+    };
+  }
+};
+
+/**
+ * Get bill providers
+ * @param {string} category - Bill category (airtime, data, electricity, cable, water, internet)
+ * @returns {object} - List of providers
+ */
+const getBillProviders = async (category = null) => {
+  try {
+    const endpoint = category ? `bills/providers?category=${category}` : 'bills/providers';
+    const result = await makeWemaRequest('GET', endpoint);
+
+    if (result.success) {
+      const providers = Array.isArray(result.data) ? result.data : result.data.providers || [];
+      return {
+        success: true,
+        providers: providers.map(provider => ({
+          id: provider.id || provider.code,
+          name: provider.name,
+          category: provider.category,
+          status: provider.status || 'active'
+        })),
+        count: providers.length
+      };
+    } else {
+      return {
+        success: false,
+        error: result.error || result.message,
+        providers: []
+      };
+    }
+  } catch (err) {
+    logger.error('Wema getBillProviders error:', err.message);
+    return {
+      success: false,
+      error: 'Failed to fetch bill providers: ' + err.message,
+      providers: []
+    };
+  }
+};
+
+/**
+ * Get data plans for a network
+ * @param {string} networkCode - Network code
+ * @returns {object} - List of data plans
+ */
+const getDataPlans = async (networkCode) => {
+  try {
+    const result = await makeWemaRequest('GET', `bills/data/plans?network=${networkCode}`);
+
+    if (result.success) {
+      const plans = Array.isArray(result.data) ? result.data : result.data.plans || [];
+      return {
+        success: true,
+        plans: plans.map(plan => ({
+          id: plan.id || plan.code,
+          name: plan.name,
+          amount: plan.amount,
+          validity: plan.validity,
+          dataVolume: plan.dataVolume || plan.volume
+        })),
+        count: plans.length
+      };
+    } else {
+      return {
+        success: false,
+        error: result.error || result.message,
+        plans: []
+      };
+    }
+  } catch (err) {
+    logger.error('Wema getDataPlans error:', err.message);
+    return {
+      success: false,
+      error: 'Failed to fetch data plans: ' + err.message,
+      plans: []
+    };
+  }
+};
 
 /**
  * Perform fraud check on transaction
@@ -963,5 +1394,15 @@ module.exports = {
   // Transaction monitoring
   checkFraud,
   logTransaction,
-  getTransactionLogs
+  getTransactionLogs,
+
+  // Bill payment functions
+  buyAirtime,
+  buyDataBundle,
+  payElectricityBill,
+  payCableTVBill,
+  payWaterBill,
+  payInternetBill,
+  getBillProviders,
+  getDataPlans
 };

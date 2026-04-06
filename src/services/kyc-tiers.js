@@ -221,7 +221,19 @@ const TIER_LIMITS = {
 
 class KYCService {
   constructor() {
-    this.KYCTier = mongoose.model('KYCTier', kycTierSchema);
+    try {
+      this.KYCTier = mongoose.model('KYCTier', kycTierSchema);
+      logger.info('KYCTier model registered successfully');
+    } catch (err) {
+      if (err.name === 'OverwriteModelError') {
+        // Model already registered, use it
+        this.KYCTier = mongoose.model('KYCTier');
+        logger.info('KYCTier model already exists, using existing model');
+      } else {
+        logger.error('Failed to register KYCTier model:', err.message);
+        throw err;
+      }
+    }
   }
 
   // ============================================
@@ -230,6 +242,16 @@ class KYCService {
 
   async submitTier1(userId, data) {
     try {
+      logger.info('submitTier1 called with userId:', userId, 'data:', data);
+      
+      if (!userId) {
+        throw new Error('userId is required for Tier 1 submission');
+      }
+
+      if (!this.KYCTier) {
+        throw new Error('KYCTier model is not initialized');
+      }
+
       const { phoneNumber, email, firstName, lastName, dateOfBirth } = data;
 
       // Validate required fields
@@ -237,9 +259,12 @@ class KYCService {
         throw new Error('Missing required fields for Tier 1 (phone, email, firstName, lastName, dateOfBirth)');
       }
 
+      logger.info('Finding KYCTier for userId:', userId);
       let kycTier = await this.KYCTier.findOne({ userId });
+      logger.info('KYCTier found:', !!kycTier);
 
       if (!kycTier) {
+        logger.info('Creating new KYCTier for userId:', userId);
         kycTier = new this.KYCTier({ userId });
       }
 
@@ -256,7 +281,9 @@ class KYCService {
         status: 'pending'
       };
 
+      logger.info('Saving KYCTier...');
       await kycTier.save();
+      logger.info('KYCTier saved successfully');
 
       logger.info(`Tier 1 KYC submitted for user ${userId}`);
 
@@ -267,7 +294,7 @@ class KYCService {
         status: 'pending'
       };
     } catch (err) {
-      logger.error('Tier 1 submission error:', err.message);
+      logger.error('Tier 1 submission error:', err.message, err.stack);
       throw err;
     }
   }

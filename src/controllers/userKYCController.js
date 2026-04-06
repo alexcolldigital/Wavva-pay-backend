@@ -11,12 +11,35 @@ const getUserKYCDetails = async (req, res) => {
   try {
     const userId = req.userId;
 
+    if (!userId) {
+      logger.error('No userId in request');
+      return res.status(401).json({ error: 'Unauthorized: No user ID' });
+    }
+
+    logger.info('Fetching KYC for user:', userId);
+
     let userKYC = await UserKYC.findOne({ userId });
 
     if (!userKYC) {
+      logger.info('No KYC record found, creating new one for user:', userId);
       // Create new KYC record if doesn't exist
-      userKYC = new UserKYC({ userId });
-      await userKYC.save();
+      try {
+        userKYC = new UserKYC({ 
+          userId, 
+          idType: 'passport',
+          status: 'pending',
+          verified: false,
+          kycLevel: 0
+        });
+        await userKYC.save();
+        logger.info('Successfully created new KYC record for user:', userId);
+      } catch (saveErr) {
+        logger.error('Error saving new KYC record:', saveErr.message, saveErr);
+        return res.status(500).json({ 
+          error: 'Failed to create KYC record',
+          details: saveErr.message 
+        });
+      }
     }
 
     res.json({
@@ -41,8 +64,11 @@ const getUserKYCDetails = async (req, res) => {
       }
     });
   } catch (err) {
-    logger.error('Get user KYC error:', err.message);
-    res.status(500).json({ error: 'Failed to retrieve KYC details' });
+    logger.error('Get user KYC error:', err.message, err.stack);
+    res.status(500).json({ 
+      error: 'Failed to retrieve KYC details',
+      details: err.message 
+    });
   }
 };
 
