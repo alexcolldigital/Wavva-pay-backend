@@ -95,6 +95,18 @@ const userSchema = new mongoose.Schema({
     security: { type: Boolean, default: true },
     promotions: { type: Boolean, default: false }
   },
+
+  // Transaction alert preferences
+  transactionAlerts: {
+    emailTransactionAlerts: { type: Boolean, default: true },
+    smsTransactionAlerts: { type: Boolean, default: true },
+    emailOnDebit: { type: Boolean, default: true },
+    emailOnCredit: { type: Boolean, default: true },
+    smsOnDebit: { type: Boolean, default: true },
+    smsOnCredit: { type: Boolean, default: true },
+    billPaymentAlerts: { type: Boolean, default: true },
+    minimumAlertAmount: { type: Number, default: 0 }, // Alert only if amount > this (in cents)
+  },
   
   // Security - 4-digit PIN for transactions
   pin: String,

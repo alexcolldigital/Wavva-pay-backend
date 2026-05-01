@@ -4,7 +4,9 @@ const CommissionService = require('../commission/commissionService');
 const { calculateFee } = require('../../utils/feeCalculator');
 const { recordCommission } = require('../../services/commissionService');
 const unifiedLedgerService = require('../../services/unifiedLedgerService');
+const TransactionAlertService = require('../../services/transactionAlertService');
 const Ledger = require('../../models/Ledger');
+const User = require('../../models/User');
 
 class TransactionService {
   // Process a complete transaction with all wallet movements
@@ -85,6 +87,14 @@ class TransactionService {
       await transaction.save({ session });
 
       await session.commitTransaction();
+
+      // Send transaction alerts (non-blocking)
+      try {
+        await this._sendTransactionAlerts(transaction, senderId, receiverId);
+      } catch (alertError) {
+        console.error('Error sending transaction alerts:', alertError.message);
+        // Don't throw - alerts are not critical to transaction success
+      }
 
       return {
         transaction,
@@ -459,6 +469,40 @@ class TransactionService {
         transaction,
         ledgerEntries
       };
+    }
+  }
+
+  /**
+   * Send transaction alerts to users
+   */
+  static async _sendTransactionAlerts(transaction, senderId, receiverId) {
+    try {
+      // Get sender details
+      const sender = await User.findById(senderId).select('email phoneNumber transactionAlerts notificationPreferences');
+      if (sender) {
+        await TransactionAlertService.sendTransactionAlert(transaction, sender, sender.transactionAlerts);
+      }
+
+      // Get receiver details and send alert if exists
+      if (receiverId) {
+        const receiver = await User.findById(receiverId).select('email phoneNumber transactionAlerts notificationPreferences');
+        if (receiver) {
+          // Populate sender/receiver for alert service
+          const populatedTxn = await mongoose.model('Transaction').findById(transaction._id)
+            .populate('sender', 'firstName lastName email')
+            .populate('receiver', 'firstName lastName email');
+          
+          await TransactionAlertService.sendTransactionAlert(populatedTxn, receiver, receiver.transactionAlerts);
+        }
+      }
+    } catch (error) {
+      console.error('Error in _sendTransactionAlerts:', error);
+      throw error;
+    }
+  }
+}
+
+module.exports = TransactionService;
 
     } catch (error) {
       throw new Error(`Failed to get transaction details: ${error.message}`);

@@ -82,6 +82,7 @@ app.use('/api/combines', require('./routes/combines'));
 app.use('/api/payment-requests', require('./routes/paymentRequests'));
 app.use('/api/payments', require('./routes/payments'));
 app.use('/api/notifications', require('./routes/notifications'));
+app.use('/api/receipts', require('./routes/receipts'));
 app.use('/api/referrals', require('./routes/referrals'));
 app.use('/api/support', require('./routes/support'));
 app.use('/api/voice', require('./routes/voice'));
