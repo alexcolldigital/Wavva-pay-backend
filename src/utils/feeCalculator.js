@@ -16,6 +16,26 @@ const FEE_CONFIG = {
     'NGN': 0.5,    // 0.5% for Naira Wallet Funding
     'USD': 1.0,    // 1.0% for Dollar Wallet Funding
   },
+  'bill_payment': {
+    'NGN': 1.5,
+    'USD': 2.0,
+  },
+  'airtime': {
+    'NGN': 1.5,
+    'USD': 2.0,
+  },
+  'data_bundle': {
+    'NGN': 1.5,
+    'USD': 2.0,
+  },
+  'electricity': {
+    'NGN': 1.5,
+    'USD': 2.0,
+  },
+  'cable': {
+    'NGN': 1.5,
+    'USD': 2.0,
+  },
   'international_transfer': {
     'NGN': 2.0,    // 2.0% for Naira International
     'USD': 2.5,    // 2.5% for Dollar International

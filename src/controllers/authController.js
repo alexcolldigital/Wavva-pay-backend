@@ -3,12 +3,78 @@ const User = require('../models/User');
 const Wallet = require('../models/Wallet');
 const UserKYC = require('../models/UserKYC');
 const FlutterwaveService = require('../modules/flutterwave/flutterwaveService');
-const { sendOTP } = require('../services/notifications');
+const wemaService = require('../services/wema');
+const { sendOTP, sendEmailVerificationCode } = require('../services/notifications');
 const { generateTokenPair, verifyToken } = require('../utils/tokenManager');
 const { assignDefaultWavvaTag } = require('../utils/wavvaTag');
 const logger = require('../utils/logger');
 
 const flutterwaveService = new FlutterwaveService();
+
+const getVerificationState = (user) => {
+  const method = user.verificationMethod || 'email';
+  const isVerified = method === 'phone' ? user.phoneVerified : user.emailVerified;
+  return { method, isVerified };
+};
+
+const dispatchVerificationCode = async (user) => {
+  const method = user.verificationMethod || 'email';
+
+  if (method === 'phone') {
+    if (!user.phone) {
+      throw new Error('Phone number is required for phone verification');
+    }
+    return sendOTP(user);
+  }
+
+  if (!user.email) {
+    throw new Error('Email is required for email verification');
+  }
+
+  return sendEmailVerificationCode(user);
+};
+
+const buildAuthUser = (user) => ({
+  id: user._id,
+  username: user.username,
+  wavvaTag: user.wavvaTag,
+  email: user.email,
+  phone: user.phone || '',
+  firstName: user.firstName,
+  lastName: user.lastName,
+  avatar: user.profilePicture,
+  status: user.accountStatus || 'active',
+  emailVerified: user.emailVerified || false,
+  phoneVerified: user.phoneVerified || false,
+  verificationMethod: user.verificationMethod || 'email',
+  kycStatus: user.kyc?.verified ? 'verified' : 'pending',
+  isAdmin: user.isAdmin || false,
+  virtualAccount: user.virtualAccount ? {
+    accountNumber: user.virtualAccount.accountNumber,
+    accountName: user.virtualAccount.accountName,
+    bankCode: user.virtualAccount.bankCode,
+    bankName: user.virtualAccount.bankName,
+    status: user.virtualAccount.status
+  } : null,
+  createdAt: user.createdAt
+});
+
+const buildDeliverySummary = (delivery, method) => {
+  if (!delivery || typeof delivery !== 'object') {
+    return {
+      success: false,
+      sent: false,
+      method
+    };
+  }
+
+  return {
+    success: !!delivery.success,
+    sent: method === 'phone' ? !!delivery.smsSent : !!delivery.emailSent,
+    method,
+    error: delivery.error || null
+  };
+};
 
 // Signup
 const signup = async (req, res) => {
@@ -16,7 +82,7 @@ const signup = async (req, res) => {
   console.log('[DEBUG] Request body:', req.body);
   
   try {
-    const { firstName, lastName, username, email, phone, password } = req.body;
+    const { firstName, lastName, username, email, phone, password, verificationMethod = 'email' } = req.body;
     
     console.log('[DEBUG] Signup request received:', { firstName, lastName, username, email, phone });
     
@@ -88,6 +154,14 @@ const signup = async (req, res) => {
       errors.password = 'Password must be less than 128 characters';
       console.log('[VALIDATION] Password too long');
     }
+
+    if (!['email', 'phone'].includes(verificationMethod)) {
+      errors.verificationMethod = 'Verification method must be email or phone';
+    }
+
+    if (verificationMethod === 'phone' && (!phone || phone.trim() === '')) {
+      errors.phone = 'Phone number is required when phone verification is selected';
+    }
     
     // If there are validation errors, return them all
     if (Object.keys(errors).length > 0) {
@@ -150,6 +224,9 @@ const signup = async (req, res) => {
       wavvaTag: await assignDefaultWavvaTag(User, { username: username.toLowerCase(), email: email.toLowerCase(), firstName, lastName }),
       email: email.toLowerCase(),
       phone: phone ? phone.trim() : undefined,
+      verificationMethod,
+      emailVerified: false,
+      phoneVerified: false,
       passwordHash: password,
       qrCodeData: `wavva_pay_${email}_${Date.now()}`,
     });
@@ -240,37 +317,17 @@ const signup = async (req, res) => {
       console.log('[WARN] Virtual account error, continuing without it:', vatErr.message);
     }
     
-    console.log('[DEBUG] Generating tokens...');
-    const { accessToken, refreshToken } = generateTokenPair(user._id);
+    const verificationDispatch = await dispatchVerificationCode(user);
     
     console.log('[DEBUG] Sending success response...');
     res.status(201).json({
       success: true,
-      message: 'Account created successfully!',
-      accessToken,
-      refreshToken,
-      user: {
-        id: user._id,
-        username: user.username,
-        wavvaTag: user.wavvaTag,
-        email: user.email,
-        phone: user.phone || '',
-        firstName: user.firstName,
-        lastName: user.lastName,
-        avatar: user.profilePicture,
-        status: user.accountStatus || 'active',
-        emailVerified: user.emailVerified || false,
-        kycStatus: user.kyc?.verified ? 'verified' : 'pending',
-        isAdmin: user.isAdmin || false,
-        virtualAccount: user.virtualAccount ? {
-          accountNumber: user.virtualAccount.accountNumber,
-          accountName: user.virtualAccount.accountName,
-          bankCode: user.virtualAccount.bankCode,
-          bankName: user.virtualAccount.bankName,
-          status: user.virtualAccount.status
-        } : null,
-        createdAt: user.createdAt
-      }
+      message: `Account created. Enter the code sent via ${verificationMethod}.`,
+      requiresVerification: true,
+      verificationMethod,
+      verificationTarget: verificationMethod === 'phone' ? user.phone : user.email,
+      delivery: buildDeliverySummary(verificationDispatch, verificationMethod),
+      user: buildAuthUser(user)
     });
     console.log('[DEBUG] Response sent successfully');
   } catch (err) {
@@ -315,6 +372,16 @@ const login = async (req, res) => {
     if (!user || !await user.comparePassword(password)) {
       return res.status(401).json({ error: 'Invalid credentials' });
     }
+
+    const verificationState = getVerificationState(user);
+    if (!verificationState.isVerified) {
+      return res.status(403).json({
+        error: `Please verify your ${verificationState.method} before logging in`,
+        requiresVerification: true,
+        verificationMethod: verificationState.method,
+        userId: user._id
+      });
+    }
     
     // Generate token pair (access + refresh)
     const { accessToken, refreshToken } = generateTokenPair(user._id);
@@ -322,20 +389,7 @@ const login = async (req, res) => {
     res.json({ 
       accessToken, 
       refreshToken,
-      user: { 
-        id: user._id,
-        username: user.username,
-        email: user.email,
-        phone: user.phone || '',
-        firstName: user.firstName,
-        lastName: user.lastName,
-        avatar: user.profilePicture,
-        status: user.accountStatus || 'active',
-        emailVerified: user.emailVerified || false,
-        kycStatus: user.kyc?.verified ? 'verified' : 'pending',
-        isAdmin: user.isAdmin || false,
-        createdAt: user.createdAt
-      } 
+      user: buildAuthUser(user) 
     });
   } catch (err) {
     logger.error('Login failed', err.message);
@@ -540,7 +594,9 @@ const verifyOtp = async (req, res) => {
     }
     
     user.phoneVerified = true;
+    user.verificationCompletedAt = new Date();
     user.phoneVerificationOTP = null;
+    user.phoneVerificationExpires = null;
     await user.save();
     
     const token = jwt.sign({ userId: user._id }, process.env.JWT_SECRET, {
@@ -550,6 +606,140 @@ const verifyOtp = async (req, res) => {
     res.json({ token, message: 'Phone verified successfully' });
   } catch (err) {
     res.status(500).json({ error: 'OTP verification failed' });
+  }
+};
+
+// Complete signup verification for email or phone
+const completeSignupVerification = async (req, res) => {
+  try {
+    const { userId, code, method } = req.body;
+
+    if (!userId || !code || !method) {
+      return res.status(400).json({ error: 'userId, code and method are required' });
+    }
+
+    if (!['email', 'phone'].includes(method)) {
+      return res.status(400).json({ error: 'Verification method must be email or phone' });
+    }
+
+    const user = await User.findById(userId);
+    if (!user) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+
+    if ((user.verificationMethod || 'email') !== method) {
+      return res.status(400).json({ error: 'Verification method does not match this account' });
+    }
+
+    const now = new Date();
+    if (method === 'email') {
+      if (user.emailVerificationCode !== code || !user.emailVerificationCodeExpires || now > user.emailVerificationCodeExpires) {
+        return res.status(400).json({ error: 'Invalid or expired verification code' });
+      }
+      user.emailVerified = true;
+      user.emailVerificationCode = null;
+      user.emailVerificationCodeExpires = null;
+    } else {
+      if (user.phoneVerificationOTP !== code || !user.phoneVerificationExpires || now > user.phoneVerificationExpires) {
+        return res.status(400).json({ error: 'Invalid or expired verification code' });
+      }
+      user.phoneVerified = true;
+      user.phoneVerificationOTP = null;
+      user.phoneVerificationExpires = null;
+    }
+
+    user.verificationCompletedAt = new Date();
+    await user.save();
+
+    // Auto-assign KYC Tier 1 after email/phone verification
+    try {
+      const existingKYC = await UserKYC.findOne({ userId: user._id });
+      
+      if (!existingKYC) {
+        const userKYC = new UserKYC({
+          userId: user._id,
+          firstName: user.firstName,
+          lastName: user.lastName,
+          status: 'approved',
+          verified: true,
+          verifiedDate: new Date(),
+          kycLevel: 1, // Tier 1: Basic verification (email/phone verified)
+          
+          // Set default transaction limits for Tier 1
+          limits: {
+            dailyLimit: 500000,        // ₦5,000 or $50
+            monthlyLimit: 5000000,     // ₦50,000 or $500
+            singleTransactionLimit: 1000000 // ₦10,000 or $100
+          },
+          
+          // Set expiry to 2 years from verification
+          expiryDate: new Date(Date.now() + 2 * 365 * 24 * 60 * 60 * 1000),
+          
+          // Record submission
+          submissions: [{
+            submittedAt: new Date(),
+            status: 'approved',
+            comment: 'Auto-verified at signup - Email/Phone verification completed'
+          }]
+        });
+        
+        await userKYC.save();
+        logger.info(`✅ Auto-assigned KYC Tier 1 to user ${user._id} after signup verification`);
+      }
+    } catch (kycErr) {
+      // Log but don't fail the signup if KYC creation fails
+      logger.warn(`⚠️ Failed to auto-assign KYC Tier 1 to user ${user._id}:`, kycErr.message);
+    }
+
+    const { accessToken, refreshToken } = generateTokenPair(user._id);
+
+    res.json({
+      success: true,
+      message: `${method === 'email' ? 'Email' : 'Phone number'} verified successfully`,
+      accessToken,
+      refreshToken,
+      user: buildAuthUser(user)
+    });
+  } catch (err) {
+    logger.error('Signup verification failed', err.message);
+    res.status(500).json({ error: 'Verification failed' });
+  }
+};
+
+const resendSignupVerification = async (req, res) => {
+  try {
+    const { userId, method } = req.body;
+
+    if (!userId) {
+      return res.status(400).json({ error: 'userId is required' });
+    }
+
+    const user = await User.findById(userId);
+    if (!user) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+
+    if (method && method !== user.verificationMethod) {
+      user.verificationMethod = method;
+    }
+
+    const verificationState = getVerificationState(user);
+    if (verificationState.isVerified) {
+      return res.status(400).json({ error: 'Account is already verified' });
+    }
+
+    const delivery = await dispatchVerificationCode(user);
+
+    res.json({
+      success: true,
+      message: `Verification code sent via ${user.verificationMethod}`,
+      verificationMethod: user.verificationMethod,
+      verificationTarget: user.verificationMethod === 'phone' ? user.phone : user.email,
+      delivery: buildDeliverySummary(delivery, user.verificationMethod)
+    });
+  } catch (err) {
+    logger.error('Resend verification failed', err.message);
+    res.status(500).json({ error: 'Failed to resend verification code' });
   }
 };
 
@@ -766,6 +956,8 @@ module.exports = {
   refreshTokens,
   sendOtpHandler,
   verifyOtp,
+  completeSignupVerification,
+  resendSignupVerification,
   logout,
   forgotPassword,
   resetPassword,

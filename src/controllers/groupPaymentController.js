@@ -3,6 +3,8 @@ const User = require('../models/User');
 const Transaction = require('../models/Transaction');
 const Wallet = require('../models/Wallet');
 const logger = require('../utils/logger');
+const QRCode = require('qrcode');
+const walletService = require('../services/walletService');
 
 // Create a new group payment
 const createGroupPayment = async (req, res) => {
@@ -34,6 +36,28 @@ const createGroupPayment = async (req, res) => {
       });
     }
 
+    const paymentReference = `GP_${userId}_${Date.now()}`;
+
+    let creatorWallet = await Wallet.findOne({ userId });
+    if (creatorWallet && !creatorWallet.virtualAccountNumber) {
+      try {
+        await walletService.createVirtualAccountForUser(userId);
+        creatorWallet = await Wallet.findOne({ userId });
+      } catch (virtualAccountError) {
+        logger.warn('Group payment virtual account setup warning:', virtualAccountError.message);
+      }
+    }
+
+    const appBaseUrl = process.env.MOBILE_APP_URL || process.env.FRONTEND_URL || 'https://app.wavvapay.com';
+    const paymentLink = `${appBaseUrl.replace(/\/$/, '')}/group-payments/${paymentReference}`;
+    const qrPayload = JSON.stringify({
+      type: 'group_payment',
+      groupReference: paymentReference,
+      createdBy: userId,
+      targetAmount: Math.round(targetAmount * 100),
+      currency
+    });
+
     // Create the group payment
     const groupPayment = new GroupPayment({
       title,
@@ -50,6 +74,16 @@ const createGroupPayment = async (req, res) => {
       isPublic,
       autoReminders,
       completionAction,
+      paymentReference,
+      paymentLink,
+      qrCode: await QRCode.toDataURL(qrPayload),
+      collectionAccount: creatorWallet?.virtualAccountNumber ? {
+        accountNumber: creatorWallet.virtualAccountNumber,
+        accountName: creatorWallet.virtualAccountName,
+        bankName: creatorWallet.virtualAccountBank,
+        reference: paymentReference,
+        provider: creatorWallet.virtualAccountBank || 'virtual_account'
+      } : undefined,
       createdBy: userId,
       members: [{
         userId,

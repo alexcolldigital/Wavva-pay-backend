@@ -26,7 +26,7 @@ const walletSchema = new mongoose.Schema({
   // Provider information (for PROVIDER_WALLET)
   provider: {
     type: String,
-    enum: ['flutterwave', 'wema', 'paystack', 'other']
+    enum: ['flutterwave', 'wema', 'vtpass', 'paystack', 'other']
   },
 
   // Virtual account details (for USER_WALLET)
@@ -63,6 +63,9 @@ const walletSchema = new mongoose.Schema({
     },
     wema: {
       virtualAccountId: String,
+      accountReference: String
+    },
+    vtpass: {
       accountReference: String
     }
   }

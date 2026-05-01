@@ -5,6 +5,8 @@ const Wallet = require('../models/Wallet');
 const User = require('../models/User');
 const UserKYC = require('../models/UserKYC');
 const FlutterwaveService = require('../modules/flutterwave/flutterwaveService');
+const WemaVirtualAccountService = require('./wema/virtualAccountService');
+const unifiedLedgerService = require('./unifiedLedgerService');
 const logger = require('../utils/logger');
 
 const flutterwaveService = new FlutterwaveService();
@@ -64,48 +66,89 @@ class WalletService {
         }
       }
 
-      let virtualAccountResult;
+      let accountData;
+      let provider = 'wema';
+
       try {
-        virtualAccountResult = await flutterwaveService.createVirtualAccount(vaPayload);
-      } catch (flutterwaveError) {
-        // Flutterwave requires BVN/NIN for VA creation, even temporary
-        // If user doesn't have it, skip VA for now and return graceful response
-        if (flutterwaveError.message?.includes('BVN') || flutterwaveError.message?.includes('NIN')) {
-          logger.warn(`Skipping virtual account creation for user ${userId}: ${flutterwaveError.message}`);
-          await wallet.save();
-          return {
-            success: true,
-            message: 'Wallet created. Virtual account requires KYC verification for full features.',
-            data: {
-              accountNumber: null,
-              accountName: null,
-              bankName: null,
-              reference: null,
-              status: 'pending_kyc',
-              isPermanent: false,
-            },
-            requiresKYC: true
+        const wemaResult = await WemaVirtualAccountService.createVirtualAccount(userId, {
+          firstName: user.firstName,
+          lastName: user.lastName,
+          email: user.email,
+          phoneNumber: user.phone,
+          bvn: user.bvn || kycIdNumber,
+        });
+
+        if (wemaResult?.success && wemaResult.data?.accountNumber) {
+          accountData = {
+            account_number: wemaResult.data.accountNumber,
+            account_name: wemaResult.data.accountName,
+            bank_name: wemaResult.data.bankName || 'Wema Bank',
+            tx_ref: wemaResult.data.reference,
+            id: wemaResult.data.accountId || wemaResult.data.reference,
+            is_permanent: true,
           };
         }
-        // If it's a different error, throw it
-        throw flutterwaveError;
+      } catch (wemaError) {
+        logger.warn(`Wema virtual account creation failed for user ${userId}, falling back to Flutterwave: ${wemaError.message}`);
+        provider = 'flutterwave';
       }
 
-      if (!virtualAccountResult || virtualAccountResult.status !== 'success' || !virtualAccountResult.data) {
-        throw new Error(virtualAccountResult?.message || 'Failed to create virtual account');
-      }
+      if (!accountData) {
+        let virtualAccountResult;
+        try {
+          virtualAccountResult = await flutterwaveService.createVirtualAccount(vaPayload);
+        } catch (flutterwaveError) {
+          if (flutterwaveError.message?.includes('BVN') || flutterwaveError.message?.includes('NIN')) {
+            logger.warn(`Skipping virtual account creation for user ${userId}: ${flutterwaveError.message}`);
+            await wallet.save();
+            return {
+              success: true,
+              message: 'Wallet created. Virtual account requires KYC verification for full features.',
+              data: {
+                accountNumber: null,
+                accountName: null,
+                bankName: null,
+                reference: null,
+                status: 'pending_kyc',
+                isPermanent: false,
+              },
+              requiresKYC: true
+            };
+          }
+          throw flutterwaveError;
+        }
 
-      const accountData = virtualAccountResult.data;
+        if (!virtualAccountResult || virtualAccountResult.status !== 'success' || !virtualAccountResult.data) {
+          throw new Error(virtualAccountResult?.message || 'Failed to create virtual account');
+        }
+
+        accountData = virtualAccountResult.data;
+      }
 
       wallet.virtualAccountNumber = accountData.account_number;
       wallet.virtualAccountName = accountData.account_name || `${user.firstName || ''} ${user.lastName || ''}`.trim() || user.email;
-      wallet.virtualAccountBank = accountData.bank_name || 'Flutterwave';
+      wallet.virtualAccountBank = accountData.bank_name || (provider === 'wema' ? 'Wema Bank' : 'Flutterwave');
       wallet.virtualAccountReference = accountData.tx_ref || reference;
       wallet.virtualAccountStatus = accountData.is_permanent ? 'active' : 'inactive';
-      wallet.flutterwaveSubAccountId = accountData.id ? String(accountData.id) : undefined;
-      wallet.flutterwaveAccountReference = wallet.virtualAccountReference;
+      wallet.flutterwaveSubAccountId = provider === 'flutterwave' && accountData.id ? String(accountData.id) : undefined;
+      wallet.flutterwaveAccountReference = provider === 'flutterwave' ? wallet.virtualAccountReference : undefined;
+      wallet.wemaVirtualAccountId = provider === 'wema' ? String(accountData.id || accountData.account_id || wallet.virtualAccountReference) : wallet.wemaVirtualAccountId;
 
       await wallet.save();
+      await unifiedLedgerService.ensureUserWallet(userId, 'NGN');
+      await unifiedLedgerService.syncLegacyWalletFromV2(userId);
+      await User.findByIdAndUpdate(userId, {
+        virtualAccount: {
+          accountNumber: wallet.virtualAccountNumber,
+          accountName: wallet.virtualAccountName,
+          bankCode: '035',
+          bankName: wallet.virtualAccountBank,
+          status: wallet.virtualAccountStatus,
+          accountId: wallet.wemaVirtualAccountId || wallet.flutterwaveSubAccountId || wallet.virtualAccountReference,
+          reference: wallet.virtualAccountReference,
+          createdAt: new Date(),
+        }
+      });
 
       logger.info(`Virtual account created for user ${userId}: ${wallet.virtualAccountNumber}`);
 
@@ -118,6 +161,7 @@ class WalletService {
           reference: wallet.virtualAccountReference,
           status: wallet.virtualAccountStatus,
           isPermanent: accountData.is_permanent,
+          provider,
         }
       };
 

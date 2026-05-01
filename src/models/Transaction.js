@@ -14,7 +14,20 @@ const transactionSchema = new mongoose.Schema({
   
   type: { 
     type: String, 
-    enum: ['peer-to-peer', 'combine-split', 'payout', 'wallet_funding'], 
+    enum: [
+      'peer-to-peer',
+      'combine-split',
+      'payout',
+      'wallet_funding',
+      'bill_payment',
+      'airtime',
+      'data_bundle',
+      'merchant_payment',
+      'group_payment',
+      'group_contribution',
+      'virtual_account_credit',
+      'refund'
+    ], 
     required: true 
   },
   

@@ -6,9 +6,35 @@ const CommissionLedger = require('../models/CommissionLedger');
 const flutterwaveService = require('../services/flutterwave');
 // Wema for virtual accounts, real bank accounts, interbank transfers
 const wemaService = require('../services/wema');
+const vtpassService = require('../services/vtpass');
+const unifiedLedgerService = require('../services/unifiedLedgerService');
 const { calculateFee } = require('../utils/feeCalculator');
 const { recordCommission } = require('../services/commissionService');
 const { extractWavvaTagValue } = require('../utils/wavvaTag');
+
+// Export function to set io instance for real-time updates
+let ioInstance;
+const setIOInstance = (io) => {
+  ioInstance = io;
+};
+
+const getUserWithWallet = async (userId) => {
+  let user = await User.findById(userId).populate('walletId');
+  if (!user) {
+    throw new Error('User not found');
+  }
+  await unifiedLedgerService.ensureUserWallet(userId, 'NGN');
+  if (!user.walletId) {
+    await unifiedLedgerService.syncLegacyWalletFromV2(userId);
+    user = await User.findById(userId).populate('walletId');
+  }
+  return user;
+};
+
+const getFeeConfigTypeForCategory = (category) => {
+  if (category === 'data') return 'data_bundle';
+  return category;
+};
 
 // Send money P2P (internal transfer)
 const sendMoney = async (req, res) => {
@@ -33,11 +59,11 @@ const sendMoney = async (req, res) => {
       });
     }
 
-    // Validate method (only username, qr, or nfc allowed)
-    const validMethods = ['username', 'qr', 'nfc'];
+    // Validate method (username, tag, qr, or nfc allowed)
+    const validMethods = ['username', 'tag', 'qr', 'nfc'];
     if (!validMethods.includes(method)) {
       return res.status(400).json({ 
-        error: 'Invalid transfer method. Only username, QR code, and NFC are supported.' 
+        error: 'Invalid transfer method. Only username, tag, QR code, and NFC are supported.' 
       });
     }
     
@@ -154,6 +180,42 @@ const sendMoney = async (req, res) => {
         grossAmount: amountInCents,
         description: `P2P transfer commission: ${sender.username} → ${receiverUser.username}`
       });
+    }
+
+    // Emit real-time transaction update to both users
+    try {
+      if (ioInstance) {
+        const transactionData = {
+          id: transaction._id,
+          type: transaction.type,
+          amount: transaction.amount,
+          status: transaction.status,
+          senderId: transaction.sender._id,
+          senderName: transaction.sender.firstName + ' ' + transaction.sender.lastName,
+          receiverId: transaction.receiver._id,
+          receiverName: transaction.receiver.firstName + ' ' + transaction.receiver.lastName,
+          description: transaction.description,
+          timestamp: transaction.createdAt,
+          eventType: 'created'
+        };
+        
+        // Emit to sender
+        ioInstance.to(`user:${senderId}`).emit('transaction:update', {
+          timestamp: new Date(),
+          data: transactionData
+        });
+        
+        // Emit to receiver
+        ioInstance.to(`user:${receiverUser._id}`).emit('transaction:update', {
+          timestamp: new Date(),
+          data: transactionData
+        });
+        
+        console.log('✅ Real-time transaction update emitted:', transaction._id);
+      }
+    } catch (err) {
+      console.error('Failed to emit real-time transaction update:', err.message);
+      // Don't fail the request if real-time update fails
     }
 
     res.json({
@@ -319,10 +381,7 @@ const initializeFunding = async (req, res) => {
       return res.status(400).json({ error: 'Unsupported currency. Use NGN or USD.' });
     }
 
-    const user = await User.findById(userId).populate('walletId');
-    if (!user) {
-      return res.status(404).json({ error: 'User not found'});
-    }
+    const user = await getUserWithWallet(userId);
 
     if (!user.walletId) {
       return res.status(400).json({ error: 'User has no wallet attached.'});
@@ -740,14 +799,7 @@ const initiateTransfer = async (req, res) => {
     }
 
     // Get user and wallet
-    const user = await User.findById(userId).populate('walletId');
-    if (!user) {
-      return res.status(404).json({ error: 'User not found' });
-    }
-
-    if (!user.walletId) {
-      return res.status(404).json({ error: 'User wallet not found' });
-    }
+    const user = await getUserWithWallet(userId);
 
     // Calculate transaction fee (Bank transfer)
     const amountInCents = Math.round(amount * 100);
@@ -767,14 +819,34 @@ const initiateTransfer = async (req, res) => {
       return res.status(400).json({ error: 'Invalid bank account: ' + resolveResult.error });
     }
 
-    // Use Flutterwave for the transfer
-    const transferResult = await flutterwaveService.createTransfer(
-      account_number,
-      account_bank,
-      amount,
-      resolveResult.accountName,
-      description || 'Payment from Wavva Pay'
-    );
+    // Prefer Wema for interbank transfer when the user's virtual account is linked.
+    const sourceAccountId = user.virtualAccount?.accountId || user.walletId?.wemaVirtualAccountId;
+    let transferResult;
+    let providerUsed = 'flutterwave';
+
+    if (sourceAccountId) {
+      transferResult = await wemaService.createInterbankTransfer(
+        sourceAccountId,
+        account_number,
+        account_bank,
+        amount,
+        description || 'Payment from Wavva Pay'
+      );
+      if (transferResult.success) {
+        providerUsed = 'wema';
+      }
+    }
+
+    if (!transferResult || !transferResult.success) {
+      transferResult = await flutterwaveService.createTransfer(
+        account_number,
+        account_bank,
+        amount,
+        currency,
+        description || 'Payment from Wavva Pay'
+      );
+      providerUsed = 'flutterwave';
+    }
 
     if (!transferResult.success) {
       return res.status(400).json({ error: transferResult.error });
@@ -791,7 +863,7 @@ const initiateTransfer = async (req, res) => {
       netAmount,
       type: 'payout',
       status: 'pending', // Will update when bank confirms
-      method: 'bank_transfer',
+      method: providerUsed,
       paystackReference: transferResult.reference,
       paystackTransactionId: transferResult.transferId,
       description: description || `Bank transfer to ${account_number}`,
@@ -799,28 +871,26 @@ const initiateTransfer = async (req, res) => {
         accountNumber: account_number,
         bankCode: account_bank,
         accountName: resolveResult.accountName,
+        provider: providerUsed,
       },
     });
 
     await transaction.save();
 
-    // Deduct amount + fee from wallet (funds reserved for transfer)
-    wallet.balance -= totalDebit;
-    await wallet.save();
+    await unifiedLedgerService.processPayoutReservation({
+      userId,
+      transactionId: transaction._id,
+      amount: amountInCents,
+      feeAmount,
+      currency,
+      provider: providerUsed,
+      providerReference: transferResult.transferId || transferResult.reference,
+      reference: transferResult.reference,
+      description: description || `Bank transfer to ${resolveResult.accountName}`,
+      metadata: transaction.metadata,
+    });
 
-    // Record commission to internal ledger
-    if (feeAmount > 0) {
-      await recordCommission({
-        transactionId: transaction._id,
-        amount: feeAmount,
-        currency,
-        source: 'bank_transfer',
-        fromUser: userId,
-        feePercentage,
-        grossAmount: amountInCents,
-        description: `Bank transfer commission to ${resolveResult.accountName}`
-      });
-    }
+    const refreshedUser = await User.findById(userId).populate('walletId');
 
     res.json({
       success: true,
@@ -829,6 +899,7 @@ const initiateTransfer = async (req, res) => {
       reference: transferResult.reference,
       status: transferResult.status,
       message: 'Bank transfer initiated',
+      provider: providerUsed,
       accountName: resolveResult.accountName,
       transfer: {
         amount: (amountInCents / 100).toFixed(2),
@@ -837,7 +908,8 @@ const initiateTransfer = async (req, res) => {
           amount: (feeAmount / 100).toFixed(2)
         },
         total: (totalDebit / 100).toFixed(2),
-        currency
+        currency,
+        balanceAfter: ((refreshedUser?.walletId?.balance || 0) / 100).toFixed(2)
       }
     });
   } catch (err) {
@@ -862,8 +934,10 @@ const getTransferStatusEndpoint = async (req, res) => {
       return res.status(404).json({ error: 'Transfer not found' });
     }
 
-    // Get status from Flutterwave
-    const statusResult = await flutterwaveService.getTransferStatus(transferId);
+    const provider = transaction.method === 'wema' ? 'wema' : 'flutterwave';
+    const statusResult = provider === 'wema'
+      ? await wemaService.getInterbankTransferStatus(transferId)
+      : await flutterwaveService.getTransferStatus(transferId);
 
     if (!statusResult.success) {
       return res.status(400).json({ error: statusResult.error });
@@ -1304,7 +1378,19 @@ const sendMoneyViaNFC = async (req, res) => {
 
 const payBillEndpoint = async (req, res) => {
   try {
-    const { category, amount, networkCode, phoneNumber, providerId, meterNumber, meterType, smartCardNumber, accountNumber } = req.body;
+    const {
+      category,
+      amount,
+      networkCode,
+      phoneNumber,
+      providerId,
+      meterNumber,
+      meterType,
+      smartCardNumber,
+      accountNumber,
+      dataPlanId,
+      variationCode,
+    } = req.body;
     const userId = req.userId;
 
     if (!category || !amount) {
@@ -1313,60 +1399,55 @@ const payBillEndpoint = async (req, res) => {
       });
     }
 
-    const user = await User.findById(userId).populate('walletId');
-    if (!user) {
-      return res.status(404).json({ error: 'User not found' });
-    }
-
-    if (!user.walletId) {
-      return res.status(404).json({ error: 'User wallet not found' });
-    }
+    const user = await getUserWithWallet(userId);
 
     const amountInKobo = Math.round(amount * 100);
+    const feeConfigType = getFeeConfigTypeForCategory(category);
+    const { feeAmount, feePercentage, grossAmount } = calculateFee(amountInKobo, 'NGN', feeConfigType);
 
     // Check wallet balance
-    if (user.walletId.balance < amountInKobo) {
+    if (user.walletId.balance < grossAmount) {
       return res.status(400).json({ 
         error: 'Insufficient balance',
         balance: user.walletId.balance / 100,
-        required: amount
+        required: grossAmount / 100
       });
     }
 
     let billResult;
 
-    // Process bill payment via Wema Bills Platform
+    // Process bill payment via VTPass
     if (category === 'airtime') {
-      billResult = await wemaService.buyAirtime(networkCode, phoneNumber, amountInKobo, {
+      billResult = await vtpassService.buyAirtime(networkCode, phoneNumber, amountInKobo, {
         customerId: userId,
         email: user.email,
         phone: phoneNumber
       });
     } else if (category === 'data') {
-      billResult = await wemaService.buyDataBundle(networkCode, phoneNumber, '1GB', amountInKobo, {
+      const selectedPlan = dataPlanId || variationCode;
+      if (!selectedPlan) {
+        return res.status(400).json({ error: 'dataPlanId or variationCode is required for data purchase' });
+      }
+      billResult = await vtpassService.buyDataBundle(networkCode, phoneNumber, selectedPlan, amountInKobo, {
         customerId: userId,
         email: user.email,
         phone: phoneNumber
       });
     } else if (category === 'electricity') {
-      billResult = await wemaService.payElectricityBill(providerId || 'EKO_ELECTRICITY', meterNumber, meterType || 'prepaid', amountInKobo, {
+      billResult = await vtpassService.payElectricityBill(providerId || 'ekedc', meterNumber, meterType || 'prepaid', amountInKobo, {
         customerId: userId,
-        email: user.email
+        email: user.email,
+        phone: user.phone
       });
     } else if (category === 'cable') {
-      billResult = await wemaService.payCableTVBill(providerId || 'DSTV', smartCardNumber, amountInKobo, {
+      const selectedVariation = variationCode || dataPlanId;
+      if (!selectedVariation) {
+        return res.status(400).json({ error: 'variationCode is required for cable subscription' });
+      }
+      billResult = await vtpassService.payCableTVBill(providerId || 'dstv', smartCardNumber, selectedVariation, amountInKobo, {
         customerId: userId,
-        email: user.email
-      });
-    } else if (category === 'water') {
-      billResult = await wemaService.payWaterBill(providerId || 'LAGOS_WATER', accountNumber, amountInKobo, {
-        customerId: userId,
-        email: user.email
-      });
-    } else if (category === 'internet') {
-      billResult = await wemaService.payInternetBill(providerId || 'SMILE', accountNumber, amountInKobo, {
-        customerId: userId,
-        email: user.email
+        email: user.email,
+        phone: user.phone
       });
     } else {
       return res.status(400).json({ error: 'Unsupported bill category' });
@@ -1386,12 +1467,18 @@ const payBillEndpoint = async (req, res) => {
       amount: amountInKobo,
       currency: 'NGN',
       type: 'bill_payment',
-      method: 'wema',
+      feePercentage,
+      feeAmount,
+      netAmount: amountInKobo,
+      method: 'vtpass',
       status: billResult.status === 'success' ? 'completed' : 'pending',
       paystackReference: billResult.reference,
       metadata: {
         category: category,
         amount: amount,
+        grossAmount: grossAmount / 100,
+        provider: 'vtpass',
+        providerReference: billResult.providerReference,
         ...(category === 'airtime' || category === 'data' ? {
           networkCode: networkCode,
           phoneNumber: phoneNumber
@@ -1414,25 +1501,20 @@ const payBillEndpoint = async (req, res) => {
 
     await transaction.save();
 
-    // Debit wallet
-    user.walletId.balance -= amountInKobo;
-    await user.walletId.save();
-
-    // Record commission to internal ledger
-    const commissionRate = user.settings?.commissionRate || 1.5;
-    const commission = Math.round((amountInKobo * commissionRate) / 100);
-    
-    const commissionLedger = new CommissionLedger({
+    await unifiedLedgerService.processUtilityPurchase({
+      userId,
       transactionId: transaction._id,
-      userId: userId,
-      type: 'bill_payment',
       amount: amountInKobo,
-      commission: commission,
-      method: 'wema',
-      status: 'recorded'
+      feeAmount,
+      provider: 'vtpass',
+      providerReference: billResult.providerReference || billResult.reference,
+      reference: billResult.reference,
+      type: feeConfigType,
+      description: `Utility payment (${category})`,
+      metadata: transaction.metadata,
     });
 
-    await commissionLedger.save();
+    const refreshedUser = await User.findById(userId).populate('walletId');
 
     res.json({
       success: true,
@@ -1442,7 +1524,9 @@ const payBillEndpoint = async (req, res) => {
       category: category,
       currency: 'NGN',
       status: transaction.status,
-      newBalance: user.walletId.balance / 100,
+      fee: feeAmount / 100,
+      totalDebit: grossAmount / 100,
+      newBalance: refreshedUser.walletId.balance / 100,
       message: billResult.message
     });
   } catch (err) {
@@ -1463,28 +1547,22 @@ const buyAirtimeEndpoint = async (req, res) => {
       });
     }
 
-    const user = await User.findById(userId).populate('walletId');
-    if (!user) {
-      return res.status(404).json({ error: 'User not found' });
-    }
-
-    if (!user.walletId) {
-      return res.status(404).json({ error: 'User wallet not found' });
-    }
+    const user = await getUserWithWallet(userId);
 
     const amountInKobo = Math.round(amount * 100);
+    const { feeAmount, feePercentage, grossAmount } = calculateFee(amountInKobo, 'NGN', 'airtime');
 
     // Check wallet balance
-    if (user.walletId.balance < amountInKobo) {
+    if (user.walletId.balance < grossAmount) {
       return res.status(400).json({ 
         error: 'Insufficient balance',
         balance: user.walletId.balance / 100,
-        required: amount
+        required: grossAmount / 100
       });
     }
 
-    // Process airtime purchase via Wema
-    const airtimeResult = await wemaService.buyAirtime(networkCode, phoneNumber, amountInKobo, {
+    // Process airtime purchase via VTPass
+    const airtimeResult = await vtpassService.buyAirtime(networkCode, phoneNumber, amountInKobo, {
       email: user.email,
       phone: phoneNumber,
       customerId: userId
@@ -1504,37 +1582,37 @@ const buyAirtimeEndpoint = async (req, res) => {
       amount: amountInKobo,
       currency: 'NGN',
       type: 'airtime',
-      method: 'wema',
+      feePercentage,
+      feeAmount,
+      netAmount: amountInKobo,
+      method: 'vtpass',
       status: airtimeResult.status === 'success' ? 'completed' : 'pending',
       paystackReference: airtimeResult.reference,
       metadata: {
         networkCode: networkCode,
         phoneNumber: phoneNumber,
-        serviceType: 'airtime'
+        serviceType: 'airtime',
+        provider: 'vtpass',
+        providerReference: airtimeResult.providerReference
       }
     });
 
     await transaction.save();
 
-    // Debit wallet
-    user.walletId.balance -= amountInKobo;
-    await user.walletId.save();
-
-    // Record commission to internal ledger
-    const commissionRate = user.settings?.commissionRate || 1.5;
-    const commission = Math.round((amountInKobo * commissionRate) / 100);
-    
-    const commissionLedger = new CommissionLedger({
+    await unifiedLedgerService.processUtilityPurchase({
+      userId,
       transactionId: transaction._id,
-      userId: userId,
-      type: 'airtime',
       amount: amountInKobo,
-      commission: commission,
-      method: 'wema',
-      status: 'recorded'
+      feeAmount,
+      provider: 'vtpass',
+      providerReference: airtimeResult.providerReference || airtimeResult.reference,
+      reference: airtimeResult.reference,
+      type: 'airtime',
+      description: 'Airtime purchase',
+      metadata: transaction.metadata,
     });
 
-    await commissionLedger.save();
+    const refreshedUser = await User.findById(userId).populate('walletId');
 
     res.json({
       success: true,
@@ -1545,7 +1623,9 @@ const buyAirtimeEndpoint = async (req, res) => {
       network: networkCode,
       currency: 'NGN',
       status: transaction.status,
-      newBalance: user.walletId.balance / 100,
+      fee: feeAmount / 100,
+      totalDebit: grossAmount / 100,
+      newBalance: refreshedUser.walletId.balance / 100,
       message: airtimeResult.message
     });
   } catch (err) {
@@ -1566,28 +1646,22 @@ const buyDataBundleEndpoint = async (req, res) => {
       });
     }
 
-    const user = await User.findById(userId).populate('walletId');
-    if (!user) {
-      return res.status(404).json({ error: 'User not found' });
-    }
-
-    if (!user.walletId) {
-      return res.status(404).json({ error: 'User wallet not found' });
-    }
+    const user = await getUserWithWallet(userId);
 
     const amountInKobo = Math.round(amount * 100);
+    const { feeAmount, feePercentage, grossAmount } = calculateFee(amountInKobo, 'NGN', 'data_bundle');
 
     // Check wallet balance
-    if (user.walletId.balance < amountInKobo) {
+    if (user.walletId.balance < grossAmount) {
       return res.status(400).json({ 
         error: 'Insufficient balance',
         balance: user.walletId.balance / 100,
-        required: amount
+        required: grossAmount / 100
       });
     }
 
-    // Process data purchase via Wema
-    const dataResult = await wemaService.buyDataBundle(networkCode, phoneNumber, dataPlanId, amountInKobo, {
+    // Process data purchase via VTPass
+    const dataResult = await vtpassService.buyDataBundle(networkCode, phoneNumber, dataPlanId, amountInKobo, {
       email: user.email,
       phone: phoneNumber,
       customerId: userId
@@ -1607,38 +1681,38 @@ const buyDataBundleEndpoint = async (req, res) => {
       amount: amountInKobo,
       currency: 'NGN',
       type: 'data_bundle',
-      method: 'wema',
+      feePercentage,
+      feeAmount,
+      netAmount: amountInKobo,
+      method: 'vtpass',
       status: dataResult.status === 'success' ? 'completed' : 'pending',
       paystackReference: dataResult.reference,
       metadata: {
         networkCode: networkCode,
         phoneNumber: phoneNumber,
         dataPlanId: dataPlanId,
-        serviceType: 'data'
+        serviceType: 'data',
+        provider: 'vtpass',
+        providerReference: dataResult.providerReference
       }
     });
 
     await transaction.save();
 
-    // Debit wallet
-    user.walletId.balance -= amountInKobo;
-    await user.walletId.save();
-
-    // Record commission to internal ledger
-    const commissionRate = user.settings?.commissionRate || 1.5;
-    const commission = Math.round((amountInKobo * commissionRate) / 100);
-    
-    const commissionLedger = new CommissionLedger({
+    await unifiedLedgerService.processUtilityPurchase({
+      userId,
       transactionId: transaction._id,
-      userId: userId,
-      type: 'data_bundle',
       amount: amountInKobo,
-      commission: commission,
-      method: 'wema',
-      status: 'recorded'
+      feeAmount,
+      provider: 'vtpass',
+      providerReference: dataResult.providerReference || dataResult.reference,
+      reference: dataResult.reference,
+      type: 'data_bundle',
+      description: 'Data bundle purchase',
+      metadata: transaction.metadata,
     });
 
-    await commissionLedger.save();
+    const refreshedUser = await User.findById(userId).populate('walletId');
 
     res.json({
       success: true,
@@ -1650,7 +1724,9 @@ const buyDataBundleEndpoint = async (req, res) => {
       dataPlan: dataPlanId,
       currency: 'NGN',
       status: transaction.status,
-      newBalance: user.walletId.balance / 100,
+      fee: feeAmount / 100,
+      totalDebit: grossAmount / 100,
+      newBalance: refreshedUser.walletId.balance / 100,
       message: dataResult.message
     });
   } catch (err) {
@@ -1668,7 +1744,7 @@ const getDataPlansEndpoint = async (req, res) => {
       return res.status(400).json({ error: 'networkCode query parameter is required' });
     }
 
-    const plans = await wemaService.getDataPlans(networkCode);
+    const plans = await vtpassService.getDataPlans(networkCode);
 
     if (!plans.success) {
       return res.status(400).json({ 
@@ -1693,7 +1769,7 @@ const getBillProvidersEndpoint = async (req, res) => {
   try {
     const { category } = req.query;
 
-    const providers = await wemaService.getBillProviders(category);
+    const providers = await vtpassService.getBillProviders(category);
 
     if (!providers.success) {
       return res.status(400).json({ 
@@ -1714,7 +1790,7 @@ const getBillProvidersEndpoint = async (req, res) => {
     res.json({
       success: true,
       providers: providers.providers,
-      categories: ['airtime', 'data', 'electricity', 'cable', 'water', 'internet']
+      categories: ['airtime', 'data', 'electricity', 'cable']
     });
   } catch (err) {
     console.error('Get bill providers error:', err);
@@ -1745,4 +1821,5 @@ module.exports = {
   buyDataBundle: buyDataBundleEndpoint,
   getDataPlans: getDataPlansEndpoint,
   getBillProviders: getBillProvidersEndpoint,
+  setIOInstance,
 };

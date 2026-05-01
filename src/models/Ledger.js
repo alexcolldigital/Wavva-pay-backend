@@ -53,7 +53,7 @@ const ledgerSchema = new mongoose.Schema({
   // Provider information
   provider: {
     type: String,
-    enum: ['flutterwave', 'wema', 'paystack', 'internal', 'manual']
+    enum: ['flutterwave', 'wema', 'vtpass', 'paystack', 'internal', 'manual']
   },
   providerReference: String,
 

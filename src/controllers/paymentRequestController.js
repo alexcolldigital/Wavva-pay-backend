@@ -42,18 +42,35 @@ const createPaymentRequest = async (req, res) => {
       return res.status(400).json({ error: 'Invalid split type' });
     }
 
-    // Validate participants
-    if (participants.some(p => typeof p === 'string')) {
-      // Convert string user IDs to proper participant objects
-      const validParticipants = await Promise.all(
-        participants.map(async (p) => {
-          const user = await User.findById(p);
-          if (!user) throw new Error(`User ${p} not found`);
-          return { userId: p };
-        })
-      );
-      participants = validParticipants;
-    }
+    // Normalize participant data to user IDs and split metadata
+    const normalizeParticipant = async (participant) => {
+      if (typeof participant === 'string') {
+        const user = await User.findById(participant);
+        if (!user) throw new Error(`User ${participant} not found`);
+        return { userId: user._id };
+      }
+
+      let user;
+      if (participant.userId) {
+        user = await User.findById(participant.userId);
+      } else if (participant.phone) {
+        user = await User.findOne({ phone: participant.phone });
+      } else if (participant.email) {
+        user = await User.findOne({ email: participant.email });
+      }
+
+      if (!user) {
+        throw new Error(`Participant not found: ${participant.phone || participant.email || participant.userId}`);
+      }
+
+      const normalized = { userId: user._id };
+      if (participant.sharePercentage != null) normalized.sharePercentage = participant.sharePercentage;
+      if (participant.customAmount != null) normalized.customAmount = Math.round(participant.customAmount * 100);
+      if (participant.itemizedAmount != null) normalized.itemizedAmount = Math.round(participant.itemizedAmount * 100);
+      return normalized;
+    };
+
+    participants = await Promise.all(participants.map(normalizeParticipant));
 
     // Ensure initiator is not in participants (to avoid self-payment)
     const participantIds = participants.map(p => p.userId || p);
@@ -141,10 +158,14 @@ const createPaymentRequest = async (req, res) => {
     // Emit to each participant's personal room
     for (const participant of paymentRequest.participants) {
       req.io.to(`user:${participant.userId._id}`).emit('split_bill_created', eventData);
+      req.io.to(`user_split_bills:${participant.userId._id}`).emit('splitBills:update', eventData);
     }
 
     // Also emit to creator's split bills room
     req.io.to(`user_split_bills:${userId}`).emit('split_bill_created', eventData);
+    req.io.to(`user_split_bills:${userId}`).emit('splitBills:update', eventData);
+    req.io.to(`split_bill:${paymentRequest._id}`).emit('split_bill_created', eventData);
+    req.io.to(`split_bill:${paymentRequest._id}`).emit('splitBills:update', eventData);
 
     res.status(201).json({
       success: true,
@@ -291,10 +312,31 @@ const respondToPaymentRequest = async (req, res) => {
 
     // Emit to the bill creator's room
     req.io.to(`user_split_bills:${request.requestedBy}`).emit('participant_response', responseEventData);
+    req.io.to(`split_bill:${request._id}`).emit('participant_response', responseEventData);
+    req.io.to(`split_bill:${request._id}`).emit('split_bill_updated', {
+      requestId: request._id,
+      title: request.title,
+      status: request.status,
+      participantResponses: {
+        accepted: request.participants.filter(p => p.status === 'accepted').length,
+        declined: request.participants.filter(p => p.status === 'declined').length,
+        pending: request.participants.filter(p => p.status === 'pending').length
+      }
+    });
+    req.io.to(`split_bill:${request._id}`).emit('splitBills:update', {
+      requestId: request._id,
+      title: request.title,
+      status: request.status,
+      participantResponses: {
+        accepted: request.participants.filter(p => p.status === 'accepted').length,
+        declined: request.participants.filter(p => p.status === 'declined').length,
+        pending: request.participants.filter(p => p.status === 'pending').length
+      }
+    });
 
     // Emit to all participants' rooms for live updates
     for (const p of request.participants) {
-      req.io.to(`user_split_bills:${p.userId}`).emit('split_bill_updated', {
+      const updatePayload = {
         requestId: request._id,
         title: request.title,
         status: request.status,
@@ -303,7 +345,9 @@ const respondToPaymentRequest = async (req, res) => {
           declined: request.participants.filter(p => p.status === 'declined').length,
           pending: request.participants.filter(p => p.status === 'pending').length
         }
-      });
+      };
+      req.io.to(`user_split_bills:${p.userId}`).emit('split_bill_updated', updatePayload);
+      req.io.to(`user_split_bills:${p.userId}`).emit('splitBills:update', updatePayload);
     }
 
     res.json({
@@ -430,13 +474,9 @@ const recordPayment = async (req, res) => {
         currency: request.currency,
         paidBy: {
           userId: userId,
-          // Will be populated by frontend or additional query if needed
         },
         paidTo: {
-          userId: request.requestedBy._id,
-          firstName: request.requestedBy.firstName,
-          lastName: request.requestedBy.lastName,
-          profilePicture: request.requestedBy.profilePicture
+          userId: request.requestedBy,
         },
         transactionId: transaction._id,
         paymentDate: new Date(),
@@ -454,21 +494,62 @@ const recordPayment = async (req, res) => {
     // Emit to the payer's room for confirmation
     req.io.to(`user_split_bills:${userId}`).emit('payment_made', paymentEventData);
 
+    // Emit to the bill-specific room for this payment
+    req.io.to(`split_bill:${request._id}`).emit('split_bill:payment_received', paymentEventData);
+    req.io.to(`split_bill:${request._id}`).emit('split_bill_updated', {
+      requestId: request._id,
+      title: request.title,
+      status: request.status,
+      totalPaid: request.totalPaid / 100,
+      progressPercentage: (request.totalPaid / request.totalAmount) * 100,
+      updatedParticipant: {
+        userId: participant.userId,
+        dueAmount: participant.dueAmount / 100,
+        paidAmount: participant.paidAmount / 100,
+        status: participant.status
+      }
+    });
+    req.io.to(`split_bill:${request._id}`).emit('splitBills:update', {
+      requestId: request._id,
+      title: request.title,
+      status: request.status,
+      totalPaid: request.totalPaid / 100,
+      progressPercentage: (request.totalPaid / request.totalAmount) * 100,
+      updatedParticipant: {
+        userId: participant.userId,
+        dueAmount: participant.dueAmount / 100,
+        paidAmount: participant.paidAmount / 100,
+        status: participant.status
+      }
+    });
+
+    if (allPaid) {
+      req.io.to(`split_bill:${request._id}`).emit('split_bill:completed', {
+        requestId: request._id,
+        title: request.title,
+        status: request.status,
+        message: 'All payments received - split bill completed',
+        timestamp: new Date()
+      });
+    }
+
     // Emit to all participants' rooms for live updates
     for (const p of request.participants) {
-      req.io.to(`user_split_bills:${p.userId}`).emit('split_bill_updated', {
+      const updatePayload = {
         requestId: request._id,
         title: request.title,
         status: request.status,
         totalPaid: request.totalPaid / 100,
         progressPercentage: (request.totalPaid / request.totalAmount) * 100,
         updatedParticipant: {
-          userId: p.userId._id,
+          userId: p.userId,
           dueAmount: p.dueAmount / 100,
           paidAmount: p.paidAmount / 100,
           status: p.status
         }
-      });
+      };
+      req.io.to(`user_split_bills:${p.userId}`).emit('split_bill_updated', updatePayload);
+      req.io.to(`user_split_bills:${p.userId}`).emit('splitBills:update', updatePayload);
     }
 
     res.json({
@@ -529,10 +610,14 @@ const cancelPaymentRequest = async (req, res) => {
     // Emit to all participants' rooms
     for (const participant of request.participants) {
       req.io.to(`user_split_bills:${participant.userId}`).emit('split_bill_cancelled', cancelEventData);
+      req.io.to(`user_split_bills:${participant.userId}`).emit('splitBills:update', cancelEventData);
     }
 
     // Also emit to creator's room
     req.io.to(`user_split_bills:${request.requestedBy}`).emit('split_bill_cancelled', cancelEventData);
+    req.io.to(`user_split_bills:${request.requestedBy}`).emit('splitBills:update', cancelEventData);
+    req.io.to(`split_bill:${request._id}`).emit('split_bill_cancelled', cancelEventData);
+    req.io.to(`split_bill:${request._id}`).emit('splitBills:update', cancelEventData);
 
     res.json({
       success: true,

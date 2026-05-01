@@ -30,12 +30,14 @@ const userSchema = new mongoose.Schema({
 
   
   // Verification
-  emailVerified: { type: Boolean, default: true },
+  verificationMethod: { type: String, enum: ['email', 'phone'], default: 'email' },
+  emailVerified: { type: Boolean, default: false },
   emailVerificationCode: String,
   emailVerificationCodeExpires: Date,
   phoneVerified: { type: Boolean, default: false },
   phoneVerificationOTP: String,
   phoneVerificationExpires: Date,
+  verificationCompletedAt: Date,
   
   // BVN / NIN for Flutterwave static virtual account creation
   bvn: String,

@@ -97,9 +97,6 @@ async function recordCommission(commissionData) {
       throw new Error('Commission source is required');
     }
     
-    // Get internal ledger user
-    const ledgerUser = await getInternalLedgerUser();
-    
     // Generate ledger entry number
     const date = new Date();
     const dateString = date.getFullYear() + 
@@ -128,6 +125,13 @@ async function recordCommission(commissionData) {
     });
     
     await commission.save();
+
+    if (commissionData.auditOnly) {
+      return commission;
+    }
+
+    // Get internal ledger user
+    const ledgerUser = await getInternalLedgerUser();
     
     // Update internal ledger wallet
     const ledgerWallet = await Wallet.findById(ledgerUser.walletId);

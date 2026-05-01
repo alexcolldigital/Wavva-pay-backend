@@ -3,6 +3,7 @@ const WalletService = require('../wallet/walletService');
 const CommissionService = require('../commission/commissionService');
 const { calculateFee } = require('../../utils/feeCalculator');
 const { recordCommission } = require('../../services/commissionService');
+const unifiedLedgerService = require('../../services/unifiedLedgerService');
 const Ledger = require('../../models/Ledger');
 
 class TransactionService {
@@ -342,248 +343,24 @@ class TransactionService {
 
       // Wallet funding specific: move amount to user wallet and collect fee
       if (transaction.type === 'wallet_funding') {
-        console.log('💳 Processing wallet funding...');
-        console.log('� DEBUG - Settlement input:');
-        console.log('   amount:', amount);
-        console.log('   amount type:', typeof amount);
-        console.log('   currency:', currency);
-        console.log('   transaction.amount (from DB):', transaction.amount);
-        console.log('   transaction.amount / 100:', transaction.amount / 100);
-        
         const feeData = calculateFee(amount, currency, 'wallet_funding');
-        console.log('📊 Fee calculation result:');
-        console.log('   - feePercentage:', feeData.feePercentage + '%');
-        console.log('   - feeAmount (Kobo):', feeData.feeAmount, '=', '₦', (feeData.feeAmount / 100).toFixed(2));
-        console.log('   - netAmount (Kobo):', feeData.netAmount, '=', '₦', (feeData.netAmount / 100).toFixed(2));
-        console.log('   - grossAmount (Kobo):', feeData.grossAmount, '=', '₦', (feeData.grossAmount / 100).toFixed(2));
 
-        try {
-          // Try to get user wallet from WalletV2 (new system)
-          const userWallet = await WalletService.getUserWallet(transaction.sender, currency);
-          
-          console.log('🔍 Wallet Lookup: Searching for WalletV2...');
-          console.log('   Result:', userWallet ? `Found WalletV2 (${userWallet.walletId})` : 'WalletV2 NOT FOUND');
-          
-          if (!userWallet) {
-            console.log('📝 Using DIRECT WALLET UPDATE Path (old Wallet model)...');
-            
-            // Fallback: directly update the user's wallet in the old Wallet model
-            const User = mongoose.model('User');
-            const Wallet = mongoose.model('Wallet');
-            
-            const user = await User.findById(transaction.sender);
-            if (!user) {
-              throw new Error('User not found for wallet funding');
-            }
+        await unifiedLedgerService.processFundingSettlement({
+          userId: transaction.sender,
+          transactionId: transaction._id,
+          amount,
+          currency,
+          feeAmount: feeData.feeAmount,
+          provider,
+          providerReference,
+          reference: reference || `FUNDING-${transaction._id}`,
+          description: 'Wallet funding through webhook settlement',
+          metadata: webhookData,
+        });
 
-            let userWalletDoc = await Wallet.findOne({ userId: transaction.sender });
-            if (!userWalletDoc) {
-              console.log('📝 Creating new wallet for user:', transaction.sender);
-              userWalletDoc = new Wallet({
-                userId: transaction.sender,
-                balance: 0,
-                multicurrencyBalances: [{ currency, balance: 0 }]
-              });
-            }
-
-            // Update balance directly in BOTH places (root and nested wallets array)
-            console.log('💾 Updating wallet balance...');
-            console.log('   Before update:');
-            console.log('     - Root balance (cents):', userWalletDoc.balance, '(₦', userWalletDoc.balance / 100 + ')');
-            console.log('     - Nested balance (cents):', userWalletDoc.wallets[0]?.balance, '(₦', userWalletDoc.wallets[0]?.balance / 100 + ')');
-            console.log('   Adding to balance (cents):', feeData.netAmount, '(₦', feeData.netAmount / 100 + ')');
-            
-            // Update root balance (legacy)
-            userWalletDoc.balance += feeData.netAmount;
-            
-            // IMPORTANT: Also update the nested wallets array (what API returns)
-            const ngnWallet = userWalletDoc.wallets.find(w => w.currency === currency);
-            if (ngnWallet) {
-              ngnWallet.balance += feeData.netAmount;
-              console.log('   Updated NGN wallet balance: +', feeData.netAmount, '= total', ngnWallet.balance, 'cents (₦', ngnWallet.balance / 100 + ')');
-            } else {
-              // Create NGN wallet if it doesn't exist
-              userWalletDoc.wallets.push({
-                currency: 'NGN',
-                purpose: 'general',
-                name: 'NGN Wallet',
-                balance: feeData.netAmount,
-                dailyLimit: 10000 * 100,
-                monthlyLimit: 100000 * 100,
-                dailySpent: 0,
-                monthlySpent: 0,
-                isActive: true,
-                createdAt: new Date()
-              });
-              console.log('   Created new NGN wallet with balance:', feeData.netAmount, 'cents (₦', feeData.netAmount / 100 + ')');
-            }
-            
-            // Mark wallets as modified for Mongoose to track changes
-            userWalletDoc.markModified('wallets');
-            
-            // Update multicurrency balance (legacy support)
-            const currencyIndex = userWalletDoc.multicurrencyBalances.findIndex(b => b.currency === currency);
-            if (currencyIndex >= 0) {
-              userWalletDoc.multicurrencyBalances[currencyIndex].balance += feeData.netAmount;
-            } else {
-              userWalletDoc.multicurrencyBalances.push({ currency, balance: feeData.netAmount });
-            }
-            
-            try {
-              await userWalletDoc.save();
-              console.log('   After update:');
-              console.log('     - Root balance (cents):', userWalletDoc.balance, '(₦', userWalletDoc.balance / 100 + ')');
-              console.log('     - Nested balance (cents):', userWalletDoc.wallets.find(w => w.currency === currency)?.balance, '(₦', (userWalletDoc.wallets.find(w => w.currency === currency)?.balance / 100) + ')');
-              console.log('✅ Wallet saved successfully');
-            } catch (saveErr) {
-              // Handle version conflict - reload and retry once
-              if (saveErr.name === 'VersionError') {
-                console.warn('⚠️ Version conflict on wallet save, reloading and retrying...');
-                const Wallet = mongoose.model('Wallet');
-                const refreshedWallet = await Wallet.findById(transaction.sender);
-                
-                if (refreshedWallet) {
-                  refreshedWallet.balance += feeData.netAmount;
-                  const ngnWallet = refreshedWallet.wallets.find(w => w.currency === currency);
-                  if (ngnWallet) {
-                    ngnWallet.balance += feeData.netAmount;
-                  }
-                  refreshedWallet.markModified('wallets');
-                  await refreshedWallet.save();
-                  console.log('✅ Wallet saved successfully (after retry)');
-                }
-              } else {
-                throw saveErr;
-              }
-            }
-          } else {
-            // Use WalletService transfer for WalletV2
-            console.log('� Using WALLETSERVICE Path (WalletV2 model)...');
-            console.log('   userWallet.walletId:', userWallet.walletId);
-            
-            console.log('�🔄 Attempting settlement wallet transfer via WalletService...');
-            
-            // Get settlement wallet
-            const settlementWallet = await WalletService.getSettlementWallet(currency);
-            if (!settlementWallet) {
-              throw new Error('Settlement wallet not found');
-            }
-
-            console.log('📦 Settlement wallet:', settlementWallet.walletId);
-
-            // Credit settlement wallet with full amount
-            console.log('💰 Crediting settlement wallet...');
-            await WalletService.creditWallet(
-              settlementWallet.walletId,
-              amount,
-              {
-                transactionId: transaction._id,
-                reference: `WEBHOOK-${providerReference}`,
-                type: 'settlement',
-                provider,
-                userId: transaction.sender,
-                description: `Settlement from ${provider}`,
-                metadata: webhookData
-              }
-            );
-
-            // Transfer net amount from settlement to user wallet
-            console.log('🔁 Transferring net amount to user wallet...');
-            await WalletService.transfer(
-              settlementWallet.walletId,
-              userWallet.walletId,
-              feeData.netAmount,
-              {
-                transactionId: transaction._id,
-                reference: `FUNDING-${transaction._id}`,
-                type: 'wallet_funding',
-                provider,
-                userId: transaction.sender,
-                description: 'Wallet funding through webhook settlement',
-                metadata: webhookData
-              }
-            );
-
-            console.log('✅ Wallet transfer completed via WalletService');
-          }
-
-          // Record commission in commission ledger
-          if (feeData.feeAmount > 0) {
-            console.log('📝 Recording commission:', feeData.feeAmount);
-            await recordCommission({
-              transactionId: transaction._id,
-              amount: feeData.feeAmount,
-              currency,
-              source: 'wallet_funding',
-              fromUser: transaction.sender,
-              toUser: null,
-              feePercentage: feeData.feePercentage,
-              grossAmount: amount,
-              description: 'Wallet funding fee from webhook settlement'
-            });
-          }
-
-          transaction.feeAmount = feeData.feeAmount;
-          transaction.netAmount = feeData.netAmount;
-          transaction.feePercentage = feeData.feePercentage;
-
-        } catch (fundingErr) {
-          console.error('❌ Wallet funding error:', fundingErr.message);
-          console.error('   Stack:', fundingErr.stack);
-          
-          // Even if transfer fails, mark transaction as completed since payment went through
-          console.log('⚠️ Marking transaction as completed despite settlement error');
-          console.log('   User may need manual balance update');
-          
-          // Try direct balance update as last resort ONLY if it's a version error
-          // (primary update already succeeded but version conflict on save)
-          if (fundingErr.name === 'VersionError') {
-            try {
-              const Wallet = mongoose.model('Wallet');
-              const userWalletDoc = await Wallet.findOne({ userId: transaction.sender });
-              
-              if (userWalletDoc) {
-                const ngnWallet = userWalletDoc.wallets.find(w => w.currency === currency);
-                const currentNgnBalance = ngnWallet?.balance || 0;
-                const expectedBalanceAfterFunding = feeData.netAmount;
-                
-                // Only apply fallback if the amount hasn't been added yet
-                if (currentNgnBalance < expectedBalanceAfterFunding) {
-                  console.log('📊 Fallback: Balance not yet updated, applying now...');
-                  console.log('   Current balance:', currentNgnBalance, 'Expected:', expectedBalanceAfterFunding);
-                  
-                  const amountToAdd = feeData.netAmount - currentNgnBalance;
-                  userWalletDoc.balance = (userWalletDoc.balance || 0) + amountToAdd;
-                  
-                  if (ngnWallet) {
-                    ngnWallet.balance = expectedBalanceAfterFunding;
-                  } else {
-                    userWalletDoc.wallets.push({
-                      currency: 'NGN',
-                      purpose: 'general',
-                      name: 'NGN Wallet',
-                      balance: expectedBalanceAfterFunding,
-                      dailyLimit: 10000 * 100,
-                      monthlyLimit: 100000 * 100,
-                      dailySpent: 0,
-                      monthlySpent: 0,
-                      isActive: true,
-                      createdAt: new Date()
-                    });
-                  }
-                  
-                  userWalletDoc.markModified('wallets');
-                  await userWalletDoc.save();
-                  console.log('✅ Fallback balance update succeeded - balance now:', ngnWallet?.balance || expectedBalanceAfterFunding);
-                } else {
-                  console.log('✅ Balance already updated in primary attempt, skipping fallback');
-                }
-              }
-            } catch (fallbackErr) {
-              console.error('🔴 Fallback balance update also failed:', fallbackErr.message);
-            }
-          }
-        }
+        transaction.feeAmount = feeData.feeAmount;
+        transaction.netAmount = amount - feeData.feeAmount;
+        transaction.feePercentage = feeData.feePercentage;
       }
 
       // Update transaction status

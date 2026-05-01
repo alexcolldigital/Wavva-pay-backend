@@ -98,8 +98,16 @@ const groupPaymentSchema = new mongoose.Schema({
   }],
 
   // Payment Links & QR
+  paymentReference: String,
   paymentLink: String,
   qrCode: String,
+  collectionAccount: {
+    accountNumber: String,
+    accountName: String,
+    bankName: String,
+    reference: String,
+    provider: String
+  },
 
   // Related Transactions
   transactionIds: [{ type: mongoose.Schema.Types.ObjectId, ref: 'Transaction' }],

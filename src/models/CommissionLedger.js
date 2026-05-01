@@ -12,7 +12,21 @@ const commissionLedgerSchema = new mongoose.Schema({
   // Source of commission
   source: { 
     type: String, 
-    enum: ['p2p_transfer', 'wallet_funding', 'bank_transfer', 'merchant_payment', 'combine_split', 'payment_request', 'nfc_transfer', 'bill_payment', 'other'],
+    enum: [
+      'p2p_transfer',
+      'wallet_funding',
+      'bank_transfer',
+      'merchant_payment',
+      'combine_split',
+      'payment_request',
+      'nfc_transfer',
+      'bill_payment',
+      'airtime',
+      'data_bundle',
+      'electricity',
+      'cable',
+      'other'
+    ],
     required: true 
   },
   

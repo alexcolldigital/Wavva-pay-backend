@@ -201,6 +201,8 @@ router.post('/send-otp', authController.sendOtpHandler);
  *         description: OTP verified
  */
 router.post('/verify-otp', authController.verifyOtp);
+router.post('/verify-signup', authController.completeSignupVerification);
+router.post('/resend-verification', authController.resendSignupVerification);
 
 /**
  * @swagger
