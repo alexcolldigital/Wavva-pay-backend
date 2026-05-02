@@ -17,19 +17,15 @@ const server = http.createServer(app);
 
 // Connect to MongoDB
 const mongoURI = process.env.MONGODB_URI || 'mongodb://localhost:27017/wavva-pay';
-if (process.env.NODE_ENV === 'production') {
-  mongoose.connect(mongoURI)
-    .then(() => {
-      logger.info('✅ MongoDB connected successfully');
-    })
-    .catch((err) => {
-      logger.error('❌ MongoDB connection failed:', err.message);
-      console.log('⚠️  Running without MongoDB - some features may be limited');
-    });
-} else {
-  console.log('⚠️  MongoDB disabled in development mode');
-  console.log('✅ Running in demo mode with mock data');
-}
+mongoose.connect(mongoURI)
+  .then(() => {
+    logger.info('✅ MongoDB connected successfully');
+    console.log('✅ MongoDB connected to:', mongoURI);
+  })
+  .catch((err) => {
+    logger.error('❌ MongoDB connection failed:', err.message);
+    console.log('⚠️  Running without MongoDB - some features may be limited');
+  });
 
 // Parse allowed origins from environment
 const getAllowedOrigins = () => {
@@ -120,11 +116,11 @@ try {
   app.use('/api/users', require('./routes/users'));
   app.use('/api/wallets', require('./routes/wallets'));
   app.use('/api/transactions', require('./routes/transactions'));
-  app.use('/api/combines', require('./routes/combines'));
   app.use('/api/payments', require('./routes/payments'));
   app.use('/api/kyc', require('./routes/kyc'));
   app.use('/api/compliance', require('./routes/compliance'));
   app.use('/api/admin', require('./routes/admin'));
+  
   console.log('✅ Core routes loaded successfully');
 } catch (error) {
   console.error('❌ Route loading failed:', error.message);

@@ -2,7 +2,7 @@ const express = require('express');
 const multer = require('multer');
 const ComplianceService = require('../services/compliance');
 const KYC = require('../models/KYC');
-const auth = require('../middleware/auth');
+const { authMiddleware, kycRequiredMiddleware } = require('../middleware/auth');
 const logger = require('../utils/logger');
 const router = express.Router();
 
@@ -75,7 +75,7 @@ const upload = multer({
  *                 type: string
  *                 format: binary
  */
-router.post('/submit', auth, upload.fields([
+router.post('/submit', authMiddleware, upload.fields([
   { name: 'idFrontImage', maxCount: 1 },
   { name: 'idBackImage', maxCount: 1 },
   { name: 'selfieImage', maxCount: 1 },
@@ -167,7 +167,7 @@ router.post('/submit', auth, upload.fields([
  *     security:
  *       - bearerAuth: []
  */
-router.get('/status', auth, async (req, res) => {
+router.get('/status', authMiddleware, async (req, res) => {
   try {
     const userId = req.user.id;
     const kyc = await KYC.findOne({ userId }).select('-documents');
@@ -212,7 +212,7 @@ router.get('/status', auth, async (req, res) => {
  *     security:
  *       - bearerAuth: []
  */
-router.post('/review', auth, async (req, res) => {
+router.post('/review', authMiddleware, async (req, res) => {
   try {
     // Check if user is admin
     if (!req.user.isAdmin) {
@@ -269,7 +269,7 @@ router.post('/review', auth, async (req, res) => {
  *     security:
  *       - bearerAuth: []
  */
-router.get('/pending', auth, async (req, res) => {
+router.get('/pending', authMiddleware, async (req, res) => {
   try {
     if (!req.user.isAdmin) {
       return res.status(403).json({

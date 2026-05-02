@@ -1,5 +1,5 @@
 const express = require('express');
-const authMiddleware = require('../middleware/auth');
+const { authMiddleware } = require('../middleware/auth');
 const User = require('../models/User');
 const Wallet = require('../models/Wallet');
 const { generateUserId, validateUsername, validatePhone, parseUserIdentifier } = require('../utils/userIdentifier');
@@ -207,7 +207,7 @@ router.get('/search', authMiddleware, async (req, res) => {
 
     const searchQuery = query.toLowerCase();
 
-    // Search by name, username, or userId
+    // Search by name, username, userId, email, or phone
     const users = await User.find({
       $or: [
         { firstName: { $regex: searchQuery, $options: 'i' } },
@@ -215,6 +215,7 @@ router.get('/search', authMiddleware, async (req, res) => {
         { username: { $regex: searchQuery, $options: 'i' } },
         { userId: { $regex: searchQuery, $options: 'i' } },
         { phone: { $regex: searchQuery, $options: 'i' } },
+        { email: { $regex: searchQuery, $options: 'i' } },
       ],
       _id: { $ne: req.userId }, // Exclude current user
     })
@@ -340,29 +341,7 @@ router.get('/friends', authMiddleware, async (req, res) => {
   }
 });
 
-// Search users by email or phone
-router.get('/search', authMiddleware, async (req, res) => {
-  try {
-    const { query } = req.query;
 
-    if (!query || query.length < 2) {
-      return res.status(400).json({ error: 'Query too short' });
-    }
-
-    const users = await User.find({
-      $or: [
-        { email: { $regex: query, $options: 'i' } },
-        { phone: { $regex: query, $options: 'i' } },
-        { firstName: { $regex: query, $options: 'i' } },
-      ],
-      _id: { $ne: req.userId },
-    }).select('firstName lastName profilePicture email phone').limit(10);
-
-    res.json(users);
-  } catch (err) {
-    res.status(500).json({ error: 'Search failed' });
-  }
-});
 
 // Get wallet info
 router.get('/wallet', authMiddleware, async (req, res) => {

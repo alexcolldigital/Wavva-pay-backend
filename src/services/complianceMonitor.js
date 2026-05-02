@@ -467,4 +467,37 @@ class ComplianceMonitor {
   }
 }
 
+// Static utility methods for testing and direct use
+ComplianceMonitor.validateBVN = (bvn) => /^\d{11}$/.test(bvn);
+
+ComplianceMonitor.validateNigerianPhone = (phone) => /^\+234[789]\d{9}$/.test(phone);
+
+ComplianceMonitor.calculateRiskScore = (transactions) => {
+  let score = 0;
+  // Flag structuring: multiple transactions just under ₦5M
+  const structuring = transactions.filter(t => t.amount >= 4500000 && t.amount < 5000000);
+  if (structuring.length >= 3) score += 80;
+  else if (structuring.length >= 2) score += 50;
+  // High value transactions
+  transactions.forEach(t => {
+    if (t.amount >= 5000000) score += 20;
+    else if (t.amount >= 1000000) score += 10;
+  });
+  return Math.min(score, 100);
+};
+
+ComplianceMonitor.requiresCBNReporting = (transaction) => transaction.amount >= 5000000;
+
+ComplianceMonitor.getTierLimit = (tier) => {
+  const limits = { 1: 100000, 2: 500000, 3: 2000000 };
+  return limits[tier] || 0;
+};
+
 module.exports = new ComplianceMonitor();
+Object.assign(module.exports, {
+  validateBVN: ComplianceMonitor.validateBVN,
+  validateNigerianPhone: ComplianceMonitor.validateNigerianPhone,
+  calculateRiskScore: ComplianceMonitor.calculateRiskScore,
+  requiresCBNReporting: ComplianceMonitor.requiresCBNReporting,
+  getTierLimit: ComplianceMonitor.getTierLimit
+});

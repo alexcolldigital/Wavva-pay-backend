@@ -1,5 +1,5 @@
 const express = require('express');
-const authMiddleware = require('../middleware/auth');
+const { authMiddleware } = require('../middleware/auth');
 const Combine = require('../models/Combine');
 const User = require('../models/User');
 const Transaction = require('../models/Transaction');

@@ -1,6 +1,6 @@
 const express = require('express');
 const router = express.Router();
-const auth = require('../middleware/auth');
+const { authMiddleware, adminAuthMiddleware, kycRequiredMiddleware } = require('../middleware/auth');
 const ComplianceService = require('../services/compliance');
 const cbnReporting = require('../services/cbnReporting');
 const smileIdentity = require('../services/smileIdentity');
@@ -8,7 +8,7 @@ const sanctionsScreening = require('../services/sanctionsScreening');
 const logger = require('../utils/logger');
 
 // BVN Verification
-router.post('/verify-bvn', auth, async (req, res) => {
+router.post('/verify-bvn', authMiddleware, async (req, res) => {
   try {
     const { bvn } = req.body;
     
@@ -30,7 +30,7 @@ router.post('/verify-bvn', auth, async (req, res) => {
 });
 
 // Check BVN Verification Status
-router.get('/bvn-status/:jobId', auth, async (req, res) => {
+router.get('/bvn-status/:jobId', authMiddleware, async (req, res) => {
   try {
     const { jobId } = req.params;
     const result = await smileIdentity.getJobStatus(jobId);
@@ -48,7 +48,7 @@ router.get('/bvn-status/:jobId', auth, async (req, res) => {
 });
 
 // Enhanced Due Diligence
-router.post('/enhanced-due-diligence', auth, async (req, res) => {
+router.post('/enhanced-due-diligence', authMiddleware, async (req, res) => {
   try {
     const result = await ComplianceService.performEDD(req.user.id);
     
@@ -64,7 +64,7 @@ router.post('/enhanced-due-diligence', auth, async (req, res) => {
 });
 
 // Sanctions Screening
-router.post('/sanctions-screening', auth, async (req, res) => {
+router.post('/sanctions-screening', authMiddleware, async (req, res) => {
   try {
     const { name, country, dateOfBirth } = req.body;
     
@@ -97,7 +97,7 @@ const adminAuth = (req, res, next) => {
 };
 
 // Generate CBN Reports
-router.post('/reports/daily', auth, adminAuth, async (req, res) => {
+router.post('/reports/daily', authMiddleware, adminAuthMiddleware, async (req, res) => {
   try {
     const { date } = req.body;
     const reportDate = date ? new Date(date) : new Date();
@@ -117,7 +117,7 @@ router.post('/reports/daily', auth, adminAuth, async (req, res) => {
   }
 });
 
-router.post('/reports/suspicious-activity', auth, adminAuth, async (req, res) => {
+router.post('/reports/suspicious-activity', authMiddleware, adminAuthMiddleware, async (req, res) => {
   try {
     const report = await cbnReporting.generateSuspiciousActivityReport();
     const submission = await cbnReporting.submitReport(report);
@@ -134,7 +134,7 @@ router.post('/reports/suspicious-activity', auth, adminAuth, async (req, res) =>
   }
 });
 
-router.post('/reports/kyc-compliance', auth, adminAuth, async (req, res) => {
+router.post('/reports/kyc-compliance', authMiddleware, adminAuthMiddleware, async (req, res) => {
   try {
     const report = await cbnReporting.generateKYCComplianceReport();
     const submission = await cbnReporting.submitReport(report);
@@ -152,7 +152,7 @@ router.post('/reports/kyc-compliance', auth, adminAuth, async (req, res) => {
 });
 
 // Compliance Dashboard Data
-router.get('/dashboard', auth, adminAuth, async (req, res) => {
+router.get('/dashboard', authMiddleware, adminAuthMiddleware, async (req, res) => {
   try {
     const KYC = require('../models/KYC');
     const AML = require('../models/AML');
@@ -205,7 +205,7 @@ router.get('/dashboard', auth, adminAuth, async (req, res) => {
 });
 
 // Risk Assessment
-router.get('/risk-assessment/:userId', auth, adminAuth, async (req, res) => {
+router.get('/risk-assessment/:userId', authMiddleware, adminAuthMiddleware, async (req, res) => {
   try {
     const { userId } = req.params;
     const riskScore = await ComplianceService.calculateUserRiskScore(userId);
