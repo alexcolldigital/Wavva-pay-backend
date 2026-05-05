@@ -1,8 +1,6 @@
 const mongoose = require('mongoose');
-const { ObjectId } = mongoose.Types;
 
 const transactionSchema = new mongoose.Schema({
-  userId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true }, // Primary user for compliance
   sender: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
   receiver: { type: mongoose.Schema.Types.ObjectId, ref: 'User' }, // Optional for wallet funding
   
@@ -16,12 +14,22 @@ const transactionSchema = new mongoose.Schema({
   
   type: { 
     type: String, 
-    enum: ['peer-to-peer', 'combine-split', 'payout', 'wallet_funding'], 
+    enum: [
+      'peer-to-peer',
+      'combine-split',
+      'payout',
+      'wallet_funding',
+      'bill_payment',
+      'airtime',
+      'data_bundle',
+      'merchant_payment',
+      'group_payment',
+      'group_contribution',
+      'virtual_account_credit',
+      'refund'
+    ], 
     required: true 
   },
-  
-  // Reference for tracking
-  reference: { type: String, unique: true },
   
   // Chimoney integration (deprecated but kept for backward compatibility)
   chimonyTransactionId: String,
@@ -38,11 +46,12 @@ const transactionSchema = new mongoose.Schema({
   // Details
   description: String,
   combineId: { type: mongoose.Schema.Types.ObjectId, ref: 'Combine' }, // if part of combine
+  paymentRequestId: { type: mongoose.Schema.Types.ObjectId, ref: 'PaymentRequest' }, // if part of payment request
   
   // Status
   status: { 
     type: String, 
-    enum: ['pending', 'completed', 'failed', 'cancelled'],
+    enum: ['pending', 'processing', 'completed', 'failed', 'cancelled'],
     default: 'pending'
   },
   

@@ -1,15 +1,12 @@
 const express = require('express');
-const { authMiddleware, adminAuthMiddleware } = require('../middleware/auth');
-const User = require('../models/User');
-const Transaction = require('../models/Transaction');
-const Wallet = require('../models/Wallet');
-const logger = require('../utils/logger');
-const { broadcastUserStatusUpdate } = require('../websockets/socketHandler');
+const authMiddleware = require('../middleware/auth');
+const adminController = require('../controllers/adminController');
 const router = express.Router();
 
 // Admin verification middleware
 const adminMiddleware = async (req, res, next) => {
   try {
+    const User = require('../models/User');
     const user = await User.findById(req.userId);
     
     // Check if user is admin (add isAdmin field to User model)
@@ -23,381 +20,62 @@ const adminMiddleware = async (req, res, next) => {
   }
 };
 
-// Get platform statistics
-router.get('/stats', authMiddleware, adminMiddleware, async (req, res) => {
-  try {
-    const userCount = await User.countDocuments();
-    const transactionCount = await Transaction.countDocuments();
-    const totalVolume = await Transaction.aggregate([
-      { $match: { status: 'completed' } },
-      { $group: { _id: null, total: { $sum: '$amount' } } },
-    ]);
+// Platform statistics routes
+router.get('/stats', authMiddleware, adminMiddleware, adminController.getStats);
 
-    const averageTransaction = await Transaction.aggregate([
-      { $match: { status: 'completed' } },
-      { $group: { _id: null, avg: { $avg: '$amount' } } },
-    ]);
+// User management routes
+router.get('/users', authMiddleware, adminMiddleware, adminController.getUsers);
+router.post('/users/:userId/suspend', authMiddleware, adminMiddleware, adminController.suspendUser);
+router.post('/users/:userId/unsuspend', authMiddleware, adminMiddleware, adminController.unsuspendUser);
 
-    // Daily active users
-    const today = new Date();
-    today.setHours(0, 0, 0, 0);
-    const dau = await Transaction.aggregate([
-      {
-        $match: {
-          createdAt: { $gte: today },
-          status: 'completed',
-        },
-      },
-      { $group: { _id: null, uniqueUsers: { $addToSet: '$sender' } } },
-    ]);
+// Transaction management routes
+router.get('/transactions', authMiddleware, adminMiddleware, adminController.getTransactions);
+router.get('/transactions/analytics', authMiddleware, adminMiddleware, adminController.getTransactionAnalytics);
+router.post('/transactions/:transactionId/refund', authMiddleware, adminMiddleware, adminController.refundTransaction);
 
-    res.json({
-      users: userCount,
-      transactions: transactionCount,
-      totalVolume: totalVolume[0]?.total || 0,
-      averageTransaction: averageTransaction[0]?.avg || 0,
-      dailyActiveUsers: dau[0]?.uniqueUsers?.length || 0,
-      successRate: await Transaction.countDocuments({ status: 'completed' }) / transactionCount,
-    });
-  } catch (err) {
-    logger.error('Admin stats fetch failed', err.message);
-    res.status(500).json({ error: 'Failed to fetch statistics' });
-  }
-});
+// Security/Monitoring routes
+router.get('/fraud-alerts', authMiddleware, adminMiddleware, adminController.getFraudAlerts);
 
-// Get all users (paginated)
-router.get('/users', authMiddleware, adminMiddleware, async (req, res) => {
-  try {
-    const { page = 1, limit = 20, search } = req.query;
-    
-    const query = search 
-      ? { $or: [
-          { email: { $regex: search, $options: 'i' } },
-          { firstName: { $regex: search, $options: 'i' } },
-        ]}
-      : {};
+// KYC Management routes
+router.get('/kyc/pending', authMiddleware, adminMiddleware, adminController.getPendingKYC);
+router.get('/kyc/:kycId', authMiddleware, adminMiddleware, adminController.getKYCDetailsAdmin);
+router.post('/kyc/:kycId/approve', authMiddleware, adminMiddleware, adminController.approveMerchantKYC);
+router.post('/kyc/:kycId/reject', authMiddleware, adminMiddleware, adminController.rejectMerchantKYC);
+router.post('/kyc/:kycId/verify-document', authMiddleware, adminMiddleware, adminController.verifyKYCDocument);
 
-    const users = await User.find(query)
-      .select('-passwordHash')
-      .limit(limit * 1)
-      .skip((page - 1) * limit)
-      .sort({ createdAt: -1 });
+// User KYC Management routes
+router.get('/kyc/user/pending', authMiddleware, adminMiddleware, adminController.getPendingUserKYC);
+router.get('/kyc/user/:kycId', authMiddleware, adminMiddleware, adminController.getUserKYCDetailsAdmin);
+router.post('/kyc/user/:kycId/auto-verify', authMiddleware, adminMiddleware, adminController.autoVerifyUserKYCEndpoint);
+router.post('/kyc/user/:kycId/approve', authMiddleware, adminMiddleware, adminController.approveUserKYC);
+router.post('/kyc/user/:kycId/reject', authMiddleware, adminMiddleware, adminController.rejectUserKYC);
+router.post('/kyc/user/bulk-verify', authMiddleware, adminMiddleware, adminController.bulkAutoVerifyUserKYC);
 
-    const total = await User.countDocuments(query);
+// Internal Ledger Management routes
+/**
+ * Internal Commission Ledger Endpoints (Admin Only)
+ * These endpoints provide access to platform commission tracking
+ */
 
-    res.json({
-      users,
-      total,
-      pages: Math.ceil(total / limit),
-      currentPage: page,
-    });
-  } catch (err) {
-    logger.error('Admin user fetch failed', err.message);
-    res.status(500).json({ error: 'Failed to fetch users' });
-  }
-});
+// Get current ledger balance
+router.get('/ledger/balance', authMiddleware, adminMiddleware, adminController.getLedgerBalance);
 
-// Get transaction analytics
-router.get('/transactions/analytics', authMiddleware, adminMiddleware, async (req, res) => {
-  try {
-    const { startDate, endDate } = req.query;
+// Get commission statistics for a period
+router.get('/ledger/stats', authMiddleware, adminMiddleware, adminController.getCommissionStats);
 
-    const dateFilter = {};
-    if (startDate) dateFilter.$gte = new Date(startDate);
-    if (endDate) dateFilter.$lte = new Date(endDate);
+// Get ledger entries with pagination
+router.get('/ledger/entries', authMiddleware, adminMiddleware, adminController.getLedgerEntries);
 
-    const pipeline = [
-      { $match: { createdAt: dateFilter } },
-      {
-        $group: {
-          _id: '$type',
-          count: { $sum: 1 },
-          total: { $sum: '$amount' },
-          avgAmount: { $avg: '$amount' },
-        },
-      },
-    ];
+// Get ledger summary (balance + monthly/all-time totals)
+router.get('/ledger/summary', authMiddleware, adminMiddleware, adminController.getLedgerSummary);
 
-    const analytics = await Transaction.aggregate(pipeline);
+// Get detailed commission breakdown report
+router.get('/ledger/report', authMiddleware, adminMiddleware, adminController.getCommissionReport);
 
-    // Daily breakdown
-    const dailyPipeline = [
-      { $match: { createdAt: dateFilter, status: 'completed' } },
-      {
-        $group: {
-          _id: { $dateToString: { format: '%Y-%m-%d', date: '$createdAt' } },
-          count: { $sum: 1 },
-          volume: { $sum: '$amount' },
-        },
-      },
-      { $sort: { _id: 1 } },
-    ];
-
-    const dailyAnalytics = await Transaction.aggregate(dailyPipeline);
-
-    res.json({
-      analytics,
-      dailyAnalytics,
-    });
-  } catch (err) {
-    logger.error('Analytics fetch failed', err.message);
-    res.status(500).json({ error: 'Failed to fetch analytics' });
-  }
-});
-
-// Get all transactions (admin view with pagination and filters)
-router.get('/transactions', authMiddleware, adminMiddleware, async (req, res) => {
-  try {
-    const { page = 1, limit = 50, status, type, search, sortBy = 'createdAt', sortOrder = 'desc' } = req.query;
-    
-    const query = {};
-    
-    if (status) {
-      query.status = status;
-    }
-    
-    if (type) {
-      query.type = type;
-    }
-    
-    if (search) {
-      query.$or = [
-        { description: { $regex: search, $options: 'i' } },
-        { transactionId: { $regex: search, $options: 'i' } },
-      ];
-    }
-    
-    const pageNum = parseInt(page);
-    const limitNum = parseInt(limit);
-    const skip = (pageNum - 1) * limitNum;
-    
-    // Build sort object
-    const sortObj = {};
-    sortObj[sortBy] = sortOrder === 'asc' ? 1 : -1;
-    
-    const transactions = await Transaction.find(query)
-      .populate('sender', 'firstName lastName email username profilePicture')
-      .populate('receiver', 'firstName lastName email username profilePicture')
-      .populate('combineId', 'name')
-      .sort(sortObj)
-      .limit(limitNum)
-      .skip(skip);
-    
-    const total = await Transaction.countDocuments(query);
-    
-    // Get transaction statistics
-    const stats = await Transaction.aggregate([
-      { $match: query },
-      {
-        $group: {
-          _id: '$status',
-          count: { $sum: 1 },
-          totalAmount: { $sum: '$amount' },
-        }
-      }
-    ]);
-    
-    res.json({
-      success: true,
-      transactions,
-      total,
-      page: pageNum,
-      limit: limitNum,
-      pages: Math.ceil(total / limitNum),
-      stats
-    });
-  } catch (err) {
-    logger.error('Transaction fetch failed', err.message);
-    res.status(500).json({ success: false, error: 'Failed to fetch transactions' });
-  }
-});
-
-// Suspend user account
-router.post('/users/:userId/suspend', authMiddleware, adminMiddleware, async (req, res) => {
-  try {
-    const { reason } = req.body;
-
-    const user = await User.findByIdAndUpdate(
-      req.params.userId,
-      { 
-        accountStatus: 'suspended',
-        suspendedReason: reason,
-        suspendedAt: new Date(),
-      },
-      { new: true }
-    );
-
-    logger.info(`User suspended: ${req.params.userId}`, { reason });
-
-    res.json({
-      message: 'User suspended',
-      user,
-    });
-  } catch (err) {
-    logger.error('User suspension failed', err.message);
-    res.status(500).json({ error: 'Failed to suspend user' });
-  }
-});
-
-// Refund transaction
-router.post('/transactions/:transactionId/refund', authMiddleware, adminMiddleware, async (req, res) => {
-  try {
-    const { reason } = req.body;
-    const transaction = await Transaction.findById(req.params.transactionId);
-
-    if (!transaction) {
-      return res.status(404).json({ error: 'Transaction not found' });
-    }
-
-    if (transaction.status === 'refunded') {
-      return res.status(400).json({ error: 'Transaction already refunded' });
-    }
-
-    // Create refund transaction
-    const refund = new Transaction({
-      sender: transaction.receiver,
-      receiver: transaction.sender,
-      amount: transaction.amount,
-      currency: transaction.currency,
-      type: 'refund',
-      description: `Refund: ${reason}`,
-      status: 'completed',
-    });
-
-    await refund.save();
-
-    // Update original transaction
-    transaction.status = 'refunded';
-    transaction.refundedAt = new Date();
-    await transaction.save();
-
-    // Update wallets
-    const senderWallet = await Wallet.findOne({ userId: transaction.sender });
-    const receiverWallet = await Wallet.findOne({ userId: transaction.receiver });
-
-    senderWallet.balance += transaction.amount;
-    receiverWallet.balance -= transaction.amount;
-
-    await Promise.all([senderWallet.save(), receiverWallet.save()]);
-
-    logger.info(`Transaction refunded: ${req.params.transactionId}`);
-
-    res.json({
-      message: 'Transaction refunded',
-      refund,
-    });
-  } catch (err) {
-    logger.error('Refund failed', err.message);
-    res.status(500).json({ error: 'Failed to process refund' });
-  }
-});
-
-// Get fraud alerts
-router.get('/fraud-alerts', authMiddleware, adminMiddleware, async (req, res) => {
-  try {
-    // Find suspicious transactions (high amount, rapid transfers)
-    const alerts = await Transaction.aggregate([
-      {
-        $match: {
-          status: 'completed',
-          createdAt: { $gte: new Date(Date.now() - 24 * 60 * 60 * 1000) },
-        },
-      },
-      { $group: { _id: '$sender', count: { $sum: 1 }, total: { $sum: '$amount' } } },
-      { $match: { count: { $gt: 10 }, total: { $gt: 100000 } } },
-    ]);
-
-    res.json({
-      alerts,
-      count: alerts.length,
-    });
-  } catch (err) {
-    logger.error('Fraud alert fetch failed', err.message);
-    res.status(500).json({ error: 'Failed to fetch fraud alerts' });
-  }
-});
-
-// Suspend user
-router.post('/users/:userId/suspend', authMiddleware, adminMiddleware, async (req, res) => {
-  try {
-    const { userId } = req.params;
-    const { reason } = req.body;
-
-    const user = await User.findByIdAndUpdate(
-      userId,
-      {
-        accountStatus: 'suspended',
-        suspendedReason: reason,
-        suspendedAt: new Date(),
-      },
-      { new: true }
-    );
-
-    if (!user) {
-      return res.status(404).json({ error: 'User not found' });
-    }
-
-    logger.info(`User suspended: ${userId}`, { reason });
-
-    // Broadcast to admin clients
-    if (req.io) {
-      req.io.to('admin_users').emit('admin:user-status-update', {
-        userId,
-        status: 'suspended',
-        timestamp: new Date()
-      });
-    }
-
-    res.json({
-      success: true,
-      message: `User ${user.firstName} ${user.lastName} has been suspended`,
-      user,
-    });
-  } catch (err) {
-    logger.error('User suspension failed', err.message);
-    res.status(500).json({ error: 'Failed to suspend user' });
-  }
-});
-
-// Unsuspend user
-router.post('/users/:userId/unsuspend', authMiddleware, adminMiddleware, async (req, res) => {
-  try {
-    const { userId } = req.params;
-
-    const user = await User.findByIdAndUpdate(
-      userId,
-      {
-        accountStatus: 'active',
-        suspendedReason: undefined,
-        suspendedAt: undefined,
-      },
-      { new: true }
-    );
-
-    if (!user) {
-      return res.status(404).json({ error: 'User not found' });
-    }
-
-    logger.info(`User unsuspended: ${userId}`);
-
-    // Broadcast to admin clients
-    if (req.io) {
-      req.io.to('admin_users').emit('admin:user-status-update', {
-        userId,
-        status: 'active',
-        timestamp: new Date()
-      });
-    }
-
-    res.json({
-      success: true,
-      message: `User ${user.firstName} ${user.lastName} has been unsuspended`,
-      user,
-    });
-  } catch (err) {
-    logger.error('User unsuspension failed', err.message);
-    res.status(500).json({ error: 'Failed to unsuspend user' });
-  }
-});
+// Export routes
+router.get('/users/export', authMiddleware, adminMiddleware, adminController.exportUsers);
+router.get('/transactions/export', authMiddleware, adminMiddleware, adminController.exportTransactions);
+router.get('/wallets/export', authMiddleware, adminMiddleware, adminController.exportWallets);
+router.get('/commission/export', authMiddleware, adminMiddleware, adminController.exportCommissionStats);
 
 module.exports = router;

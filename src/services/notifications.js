@@ -258,15 +258,21 @@ const sendEmailVerificationCode = async (user) => {
 // Send OTP via SMS/WhatsApp
 const sendOTP = async (user) => {
   try {
-    if (!twilioClient) {
-      console.warn('Twilio not configured - OTP sending disabled');
-      return false;
-    }
-
     const otp = Math.floor(100000 + Math.random() * 900000).toString();
     user.phoneVerificationOTP = otp;
     user.phoneVerificationExpires = new Date(Date.now() + 10 * 60 * 1000); // 10 minutes
     await user.save();
+
+    if (!twilioClient) {
+      console.warn('Twilio not configured - OTP sending disabled');
+      console.log(`📱 [OTP] Development mode: ${user.phone} - Code: ${otp}`);
+      return {
+        success: true,
+        code: otp,
+        smsSent: false,
+        error: 'SMS service not configured'
+      };
+    }
 
     // Try WhatsApp first, fallback to SMS
     try {
@@ -284,10 +290,20 @@ const sendOTP = async (user) => {
       });
     }
 
-    return true;
+    return {
+      success: true,
+      code: otp,
+      smsSent: true,
+      error: null
+    };
   } catch (err) {
     console.error('OTP send error:', err.message);
-    return false;
+    return {
+      success: false,
+      code: null,
+      smsSent: false,
+      error: err.message || 'Failed to send OTP'
+    };
   }
 };
 

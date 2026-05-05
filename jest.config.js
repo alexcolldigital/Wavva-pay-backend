@@ -1,19 +1,18 @@
 module.exports = {
   testEnvironment: 'node',
-  setupFilesAfterEnv: ['<rootDir>/tests/setup.js'],
-  testMatch: ['**/tests/compliance.test.js'],
-  testTimeout: 30000,
+  testMatch: ['**/__tests__/**/*.js', '**/?(*.)+(spec|test).js'],
   collectCoverageFrom: [
     'src/**/*.js',
     '!src/server.js',
-    '!**/node_modules/**'
+    '!src/swagger.js',
   ],
   coverageThreshold: {
     global: {
-      branches: 0,
-      functions: 0,
-      lines: 0,
-      statements: 0
-    }
-  }
+      branches: 50,
+      functions: 50,
+      lines: 50,
+      statements: 50,
+    },
+  },
+  setupFilesAfterEnv: ['<rootDir>/jest.setup.js'],
 };
