@@ -80,13 +80,22 @@ app.use(cors({
   allowedHeaders: ['Content-Type', 'Authorization']
 }));
 
-// Enhanced body parsing with limits
-app.use(express.json({ 
-  limit: '10mb',
-  verify: (req, res, buf) => {
-    // Store raw body for webhook verification
-    req.rawBody = buf;
+// Normalize charset before body parsing
+app.use((req, res, next) => {
+  if (req.headers['content-type']) {
+    req.headers['content-type'] = req.headers['content-type'].replace(/charset=UTF-8/gi, 'charset=utf-8');
   }
+  next();
+});
+
+// Enhanced body parsing with limits
+app.use(express.json({
+  limit: '10mb',
+  type: (req) => {
+    const ct = req.headers['content-type'] || '';
+    return ct.includes('application/json') || ct.includes('text/plain');
+  },
+  verify: (req, res, buf) => { req.rawBody = buf; }
 }));
 app.use(express.urlencoded({ limit: '10mb', extended: true }));
 
@@ -172,30 +181,32 @@ app.use((req, res) => {
   res.sendFile(path.join(__dirname, '../public/index.html'));
 });
 
-// Start server
+// Start server — only when not in test mode
 const PORT = process.env.PORT || 4000;
-server.listen(PORT, () => {
-  console.log(`✅ Server running on port ${PORT}`);
-  console.log(`📡 WebSocket server ready`);
-  logger.info(`Server started on port ${PORT}`);
-  
-  // Start CBN compliance reporting
-  if (process.env.NODE_ENV === 'production') {
-    cbnReporting.startScheduledReporting();
-    console.log('📊 CBN compliance reporting started');
-  }
-  
-  console.log('\n🚀 Advanced Features Available:');
-  console.log('   • AI Agent: /api/advanced/ai/*');
-  console.log('   • Embedded Finance: /api/advanced/embedded/*');
-  console.log('   • Blockchain Assets: /api/advanced/blockchain/*');
-  console.log('   • Predictive Insights: /api/advanced/insights/*');
-  console.log('   • Voice & Biometric: /api/advanced/voice/* & /api/advanced/biometric/*');
-  console.log('   • Gamification: /api/advanced/gamification/*');
-  console.log('\n📖 Documentation: ADVANCED_FEATURES.md');
-  console.log('\n🌐 Interactive Web App: http://localhost:' + PORT);
-  console.log('🧪 Test Client: Open test-client.html in your browser');
-});
+if (process.env.NODE_ENV !== 'test') {
+  server.listen(PORT, () => {
+    console.log(`✅ Server running on port ${PORT}`);
+    console.log(`📡 WebSocket server ready`);
+    logger.info(`Server started on port ${PORT}`);
+
+    // Start CBN compliance reporting
+    if (process.env.NODE_ENV === 'production') {
+      cbnReporting.startScheduledReporting();
+      console.log('📊 CBN compliance reporting started');
+    }
+
+    console.log('\n🚀 Advanced Features Available:');
+    console.log('   • AI Agent: /api/advanced/ai/*');
+    console.log('   • Embedded Finance: /api/advanced/embedded/*');
+    console.log('   • Blockchain Assets: /api/advanced/blockchain/*');
+    console.log('   • Predictive Insights: /api/advanced/insights/*');
+    console.log('   • Voice & Biometric: /api/advanced/voice/* & /api/advanced/biometric/*');
+    console.log('   • Gamification: /api/advanced/gamification/*');
+    console.log('\n📖 Documentation: ADVANCED_FEATURES.md');
+    console.log('\n🌐 Interactive Web App: http://localhost:' + PORT);
+    console.log('🧪 Test Client: Open test-client.html in your browser');
+  });
+}
 
 // Graceful shutdown
 process.on('SIGTERM', () => {

@@ -4,11 +4,14 @@ npm-debug.log
 yarn-error.log
 package-lock.json
 yarn.lock
+webapp/node_modules/
+mobile/node_modules/
 
 # Environment
 .env
 .env.local
 .env.*.local
+.env.production
 
 # Logs
 logs/

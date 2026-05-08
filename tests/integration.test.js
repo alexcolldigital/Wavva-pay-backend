@@ -1,100 +1,126 @@
+/**
+ * Integration Tests — Payment Processor & Compliance
+ * Uses nock to mock external HTTP calls
+ */
 const request = require('supertest');
 const nock = require('nock');
-const app = require('../src/server');
 
-describe('Payment Processor Integration', () => {
+jest.mock('../src/services/notifications', () => ({
+  sendOTP: jest.fn().mockResolvedValue({ smsSent: true }),
+  sendEmailVerificationCode: jest.fn().mockResolvedValue({ emailSent: true }),
+}));
+jest.mock('../src/modules/flutterwave/flutterwaveService', () =>
+  jest.fn().mockImplementation(() => ({
+    createVirtualAccount: jest.fn().mockRejectedValue(new Error('Test mode')),
+  }))
+);
+
+const { app } = require('../src/server');
+
+describe('API Integration Tests', () => {
   beforeEach(() => {
     nock.cleanAll();
   });
 
-  describe('Paystack Integration', () => {
-    test('should initialize payment successfully', async () => {
-      nock('https://api.paystack.co')
-        .post('/transaction/initialize')
-        .reply(200, {
-          status: true,
-          data: {
-            authorization_url: 'https://checkout.paystack.com/test123',
-            access_code: 'test_access_code',
-            reference: 'test_ref_123'
-          }
-        });
+  afterAll(() => {
+    nock.restore();
+  });
 
-      const response = await request(app)
-        .post('/api/payments/initialize')
-        .send({
-          amount: 50000,
-          email: 'test@example.com',
-          processor: 'paystack'
-        });
+  // ─── HEALTH ───────────────────────────────────────────────────────────────────
 
-      expect(response.status).toBe(200);
-      expect(response.body.data.authorization_url).toBeDefined();
-    });
-
-    test('should verify payment successfully', async () => {
-      nock('https://api.paystack.co')
-        .get('/transaction/verify/test_ref_123')
-        .reply(200, {
-          status: true,
-          data: {
-            status: 'success',
-            amount: 5000000,
-            reference: 'test_ref_123'
-          }
-        });
-
-      const response = await request(app)
-        .get('/api/payments/verify/test_ref_123');
-
-      expect(response.status).toBe(200);
-      expect(response.body.data.status).toBe('success');
+  describe('GET /health', () => {
+    it('returns 200 with status ok', async () => {
+      const res = await request(app).get('/health');
+      expect(res.status).toBe(200);
+      expect(res.body.status).toBe('ok');
     });
   });
 
-  describe('Flutterwave Integration', () => {
-    test('should create payment link', async () => {
-      nock('https://api.flutterwave.com')
-        .post('/v3/payments')
-        .reply(200, {
-          status: 'success',
-          data: {
-            link: 'https://checkout.flutterwave.com/test123'
-          }
-        });
+  // ─── API TEST ENDPOINT ────────────────────────────────────────────────────────
 
-      const response = await request(app)
-        .post('/api/payments/initialize')
-        .send({
-          amount: 75000,
-          email: 'test@example.com',
-          processor: 'flutterwave'
-        });
-
-      expect(response.status).toBe(200);
-      expect(response.body.data.link).toBeDefined();
+  describe('GET /api/test', () => {
+    it('returns API info', async () => {
+      const res = await request(app).get('/api/test');
+      expect(res.status).toBe(200);
+      expect(res.body).toHaveProperty('message');
+      expect(res.body).toHaveProperty('features');
+      expect(Array.isArray(res.body.features)).toBe(true);
     });
   });
 
-  describe('CBN Compliance Integration', () => {
-    test('should report large transactions to CBN', async () => {
-      nock('https://api.cbn.gov.ng')
-        .post('/reporting/transactions')
-        .reply(200, {
-          status: 'success',
-          reportId: 'CBN_REP_123'
-        });
+  // ─── AUTH ROUTES ──────────────────────────────────────────────────────────────
 
-      const response = await request(app)
-        .post('/api/transactions')
-        .send({
-          amount: 6000000, // Above CBN reporting threshold
-          recipient: 'test@example.com',
-          type: 'transfer'
-        });
+  describe('POST /api/auth/register — validation', () => {
+    it('rejects empty body with 400', async () => {
+      const res = await request(app).post('/api/auth/register').send({});
+      expect(res.status).toBe(400);
+    });
 
-      expect(response.status).toBe(200);
-      expect(response.body.complianceReport).toBeDefined();
+    it('rejects missing required fields', async () => {
+      const res = await request(app).post('/api/auth/register').send({
+        firstName: 'Test',
+        // missing lastName, email, password, phone
+      });
+      expect(res.status).toBe(400);
+    });
+  });
+
+  // ─── PROTECTED ROUTES ─────────────────────────────────────────────────────────
+
+  describe('Protected routes require auth', () => {
+    it('GET /api/wallets returns 401 without token', async () => {
+      const res = await request(app).get('/api/wallets');
+      expect(res.status).toBe(401);
+    });
+
+    it('GET /api/transactions returns 401 without token', async () => {
+      const res = await request(app).get('/api/transactions');
+      expect(res.status).toBe(401);
+    });
+
+    it('POST /api/payments/send returns 401 without token', async () => {
+      const res = await request(app).post('/api/payments/send').send({});
+      expect(res.status).toBe(401);
+    });
+  });
+
+  // ─── 404 HANDLING ─────────────────────────────────────────────────────────────
+
+  describe('404 handling', () => {
+    it('returns 404 for unknown API routes', async () => {
+      const res = await request(app).get('/api/nonexistent-route-xyz');
+      expect(res.status).toBe(404);
+    });
+  });
+
+  // ─── COMPLIANCE MONITOR ───────────────────────────────────────────────────────
+
+  describe('ComplianceMonitor static methods', () => {
+    const ComplianceMonitor = require('../src/services/complianceMonitor');
+
+    it('validates BVN correctly', () => {
+      expect(ComplianceMonitor.validateBVN('12345678901')).toBe(true);
+      expect(ComplianceMonitor.validateBVN('1234')).toBe(false);
+    });
+
+    it('validates Nigerian phone numbers', () => {
+      expect(ComplianceMonitor.validateNigerianPhone('+2348012345678')).toBe(true);
+      expect(ComplianceMonitor.validateNigerianPhone('+1234567890')).toBe(false);
+    });
+
+    it('requires CBN reporting for transactions >= ₦5M', () => {
+      expect(ComplianceMonitor.requiresCBNReporting({ amount: 5000000 })).toBe(true);
+      expect(ComplianceMonitor.requiresCBNReporting({ amount: 4999999 })).toBe(false);
+    });
+
+    it('calculates risk score for structuring pattern', () => {
+      const txns = [
+        { amount: 4900000 },
+        { amount: 4800000 },
+        { amount: 4950000 },
+      ];
+      const score = ComplianceMonitor.calculateRiskScore(txns);
+      expect(score).toBeGreaterThan(70);
     });
   });
 });

@@ -1,6 +1,14 @@
 const express = require('express');
 const router = express.Router();
-const { authMiddleware, adminAuthMiddleware, kycRequiredMiddleware } = require('../middleware/auth');
+const authMiddleware = require('../middleware/auth');
+
+// Inline admin guard — checks req.user.isAdmin set by authMiddleware
+const adminAuthMiddleware = (req, res, next) => {
+  if (!req.user || !req.user.isAdmin) {
+    return res.status(403).json({ error: 'Admin access required' });
+  }
+  next();
+};
 const ComplianceService = require('../services/compliance');
 const cbnReporting = require('../services/cbnReporting');
 const smileIdentity = require('../services/smileIdentity');
