@@ -1,4 +1,4 @@
-// Wema/ALAT Product Routes (moved below, after app is initialized)
+const path = require('path');
 require('dotenv').config();
 const express = require('express');
 const http = require('http');
@@ -8,25 +8,28 @@ const mongoose = require('mongoose');
 const { Server } = require('socket.io');
 const logger = require('./utils/logger');
 const { setupSocketHandlers } = require('./websockets/socketHandler');
+const cbnReporting = require('./services/cbnReporting');
+const { inputValidator } = require('./middleware/validation');
+const security = require('./utils/security');
 
 const app = express();
 const server = http.createServer(app);
 
 // Connect to MongoDB
-const mongoURI = process.env.MONGODB_URI || process.env.MONGO_URI || 'mongodb://localhost:27017/wavvapay';
+const mongoURI = process.env.MONGODB_URI || 'mongodb://localhost:27017/wavva-pay';
 mongoose.connect(mongoURI)
   .then(() => {
     logger.info('✅ MongoDB connected successfully');
+    console.log('✅ MongoDB connected to:', mongoURI);
   })
   .catch((err) => {
     logger.error('❌ MongoDB connection failed:', err.message);
-    // Continue anyway - don't crash the server
+    console.log('⚠️  Running without MongoDB - some features may be limited');
   });
 
 // Parse allowed origins from environment
 const getAllowedOrigins = () => {
-  const allowedOriginsEnv = process.env.ALLOWED_ORIGINS || 
-    'http://localhost:3000,http://localhost:3001,http://localhost:5173,http://localhost:8081,http://localhost:8082,http://127.0.0.1:8081,http://127.0.0.1:8082';
+  const allowedOriginsEnv = process.env.ALLOWED_ORIGINS || 'http://localhost:5173,http://localhost:3001';
   return allowedOriginsEnv.split(',').map(origin => origin.trim());
 };
 
@@ -47,8 +50,23 @@ const io = new Server(server, {
   }
 });
 
-// Middleware
-app.use(helmet());
+// Enhanced middleware
+app.use(helmet({
+  contentSecurityPolicy: {
+    directives: {
+      defaultSrc: ["'self'"],
+      styleSrc: ["'self'", "'unsafe-inline'"],
+      scriptSrc: ["'self'"],
+      imgSrc: ["'self'", "data:", "https:"],
+    },
+  },
+  hsts: {
+    maxAge: 31536000,
+    includeSubDomains: true,
+    preload: true
+  }
+}));
+
 app.use(cors({
   origin: (origin, callback) => {
     if (!origin || allowedOrigins.includes(origin)) {
@@ -61,8 +79,36 @@ app.use(cors({
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization']
 }));
-app.use(express.json({ limit: '10mb' }));
+
+// Normalize charset before body parsing
+app.use((req, res, next) => {
+  if (req.headers['content-type']) {
+    req.headers['content-type'] = req.headers['content-type'].replace(/charset=UTF-8/gi, 'charset=utf-8');
+  }
+  next();
+});
+
+// Enhanced body parsing with limits
+app.use(express.json({
+  limit: '10mb',
+  type: (req) => {
+    const ct = req.headers['content-type'] || '';
+    return ct.includes('application/json') || ct.includes('text/plain');
+  },
+  verify: (req, res, buf) => { req.rawBody = buf; }
+}));
 app.use(express.urlencoded({ limit: '10mb', extended: true }));
+
+// Apply input validation globally
+app.use(inputValidator);
+
+// Serve static files (for the web app)
+app.use(express.static('public'));
+
+// Default route - serve main app
+app.get('/', (req, res) => {
+  res.sendFile(path.join(__dirname, '../public/index.html'));
+});
 
 // Make io instance available to routes
 app.use((req, res, next) => {
@@ -74,55 +120,21 @@ app.use((req, res, next) => {
 setupSocketHandlers(io);
 
 // Routes
-app.use('/api/auth', require('./routes/auth'));
-app.use('/api/users', require('./routes/users'));
-app.use('/api/wallets', require('./routes/wallets'));
-app.use('/api/transactions', require('./routes/transactions'));
-app.use('/api/combines', require('./routes/combines'));
-app.use('/api/payment-requests', require('./routes/paymentRequests'));
-app.use('/api/payments', require('./routes/payments'));
-app.use('/api/notifications', require('./routes/notifications'));
-app.use('/api/receipts', require('./routes/receipts'));
-app.use('/api/referrals', require('./routes/referrals'));
-app.use('/api/support', require('./routes/support'));
-app.use('/api/voice', require('./routes/voice'));
-app.use('/api/banking', require('./routes/banking'));
-app.use('/api/admin', require('./routes/admin'));
-
-// KYC Routes
-app.use('/api/kyc/user', require('./routes/userKYC'));
-app.use('/api/kyc/merchant', require('./routes/kyc'));
-app.use('/api/kyc-tiers', require('./routes/kyc-tiers'));
-
-// Document Upload Routes
-app.use('/api/documents', require('./routes/documents'));
-
-// Wema/ALAT Product Routes
-// Virtual account is now handled via Flutterwave to support static permanent VA
-app.use('/api/flutterwave/virtual-account', require('./routes/wema/virtualAccountRoutes'));
-app.use('/api/wema/nip-transfer', require('./routes/wema/nipTransferRoutes'));
-app.use('/api/wema/account-verification', require('./routes/wema/accountVerificationRoutes'));
-app.use('/api/wema/bank-list', require('./routes/wema/bankListRoutes'));
-app.use('/api/wema/settlement', require('./routes/wema/settlementRoutes'));
-app.use('/api/wema/customer-identification', require('./routes/wema/customerIdentificationRoutes'));
-
-// Flutterwave Routes
-app.use('/api/flutterwave', require('./routes/flutterwave'));
-
-// Group Payment Routes
-app.use('/api/group-payments', require('./routes/groupPayments'));
-
-// Merchant Routes
-app.use('/api/merchant', require('./routes/merchant'));
-app.use('/api/merchant/dashboard', require('./routes/merchantDashboard'));
-app.use('/api/merchant/settlement', require('./routes/settlement'));
-app.use('/api/merchant/subscriptions', require('./routes/subscriptions'));
-app.use('/api/invoices', require('./routes/invoices'));
-
-// Webhook Routes
-app.use('/api/webhooks', require('./webhooks/flutterwave'));
-app.use('/api/webhooks', require('./webhooks/wema'));
-app.use('/api/webhooks', require('./webhooks/chimoney'));
+try {
+  app.use('/api/auth', require('./routes/auth'));
+  app.use('/api/users', require('./routes/users'));
+  app.use('/api/wallets', require('./routes/wallets'));
+  app.use('/api/transactions', require('./routes/transactions'));
+  app.use('/api/payments', require('./routes/payments'));
+  app.use('/api/kyc', require('./routes/kyc'));
+  app.use('/api/compliance', require('./routes/compliance'));
+  app.use('/api/admin', require('./routes/admin'));
+  
+  console.log('✅ Core routes loaded successfully');
+} catch (error) {
+  console.error('❌ Route loading failed:', error.message);
+  console.error('Stack:', error.stack);
+}
 
 // Health check endpoint
 app.get('/health', (req, res) => {
@@ -130,9 +142,19 @@ app.get('/health', (req, res) => {
   res.json({ status: 'ok', timestamp: new Date() });
 });
 
-// Favicon handler
-app.get('/favicon.ico', (req, res) => {
-  res.status(204).send();
+// Test endpoint
+app.get('/api/test', (req, res) => {
+  res.json({ 
+    message: 'Wavva Pay API is running!',
+    features: [
+      'User Authentication',
+      'Wallet Management', 
+      'Transactions',
+      'Bill Payments',
+      'KYC Compliance'
+    ],
+    timestamp: new Date()
+  });
 });
 
 // Make io accessible to routes
@@ -155,31 +177,36 @@ app.use((req, res) => {
   if (req.path.startsWith('/api/')) {
     return res.status(404).json({ error: 'API route not found' });
   }
-  // For other requests, return 200 OK (frontend will handle routing)
-  res.status(404).json({ error: 'Route not found' });
+  // For other requests, serve the main app
+  res.sendFile(path.join(__dirname, '../public/index.html'));
 });
 
-// Start server
-const PORT = process.env.PORT || 8000;
-server.listen(PORT, () => {
-  console.log(`✅ Server running on port ${PORT}`);
-  console.log(`📡 WebSocket server ready`);
-  logger.info(`Server started on port ${PORT}`);
+// Start server — only when not in test mode
+const PORT = process.env.PORT || 4000;
+if (process.env.NODE_ENV !== 'test') {
+  server.listen(PORT, () => {
+    console.log(`✅ Server running on port ${PORT}`);
+    console.log(`📡 WebSocket server ready`);
+    logger.info(`Server started on port ${PORT}`);
 
-  // Initialize scheduled jobs
-  if (process.env.NODE_ENV !== 'test') {
-    try {
-      const { startSettlementCron, startRetryCheckCron } = require('./services/settlementCron');
-      const { startRecurringBillingCron } = require('./services/recurringBillingCron');
-      startSettlementCron();     // Daily settlement execution at 9 AM UTC
-      startRetryCheckCron();     // Retry failed settlements every 4 hours
-      startRecurringBillingCron(); // Recurring billing at 2 AM UTC
-      logger.info('✅ Scheduled cron jobs initialized');
-    } catch (error) {
-      logger.error('Failed to initialize cron jobs:', error.message);
+    // Start CBN compliance reporting
+    if (process.env.NODE_ENV === 'production') {
+      cbnReporting.startScheduledReporting();
+      console.log('📊 CBN compliance reporting started');
     }
-  }
-});
+
+    console.log('\n🚀 Advanced Features Available:');
+    console.log('   • AI Agent: /api/advanced/ai/*');
+    console.log('   • Embedded Finance: /api/advanced/embedded/*');
+    console.log('   • Blockchain Assets: /api/advanced/blockchain/*');
+    console.log('   • Predictive Insights: /api/advanced/insights/*');
+    console.log('   • Voice & Biometric: /api/advanced/voice/* & /api/advanced/biometric/*');
+    console.log('   • Gamification: /api/advanced/gamification/*');
+    console.log('\n📖 Documentation: ADVANCED_FEATURES.md');
+    console.log('\n🌐 Interactive Web App: http://localhost:' + PORT);
+    console.log('🧪 Test Client: Open test-client.html in your browser');
+  });
+}
 
 // Graceful shutdown
 process.on('SIGTERM', () => {

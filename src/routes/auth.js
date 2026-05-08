@@ -1,366 +1,101 @@
 const express = require('express');
-const authController = require('../controllers/authController');
+const jwt = require('jsonwebtoken');
+const User = require('../models/User');
+const Wallet = require('../models/Wallet');
+const authMiddleware = require('../middleware/auth');
 const router = express.Router();
 
-/**
- * @swagger
- * /auth/signup:
- *   post:
- *     tags:
- *       - Authentication
- *     summary: Create a new user account
- *     requestBody:
- *       required: true
- *       content:
- *         application/json:
- *           schema:
- *             type: object
- *             properties:
- *               firstName:
- *                 type: string
- *               lastName:
- *                 type: string
- *               email:
- *                 type: string
- *               phone:
- *                 type: string
- *               password:
- *                 type: string
- *                 minLength: 6
- *     responses:
- *       200:
- *         description: User created successfully
- *         content:
- *           application/json:
- *             schema:
- *               type: object
- *               properties:
- *                 token:
- *                   type: string
- *                 user:
- *                   $ref: '#/components/schemas/User'
- *       400:
- *         description: Invalid input or user already exists
- *         content:
- *           application/json:
- *             schema:
- *               $ref: '#/components/schemas/Error'
- */
-router.post('/signup', authController.signup);
+// Register
+router.post('/register', async (req, res) => {
+  try {
+    const { email, password, firstName, lastName, phone } = req.body;
+    if (!email || !password || !firstName || !lastName || !phone) {
+      return res.status(400).json({ error: 'All fields are required' });
+    }
+    const existingUser = await User.findOne({ $or: [{ email }, { phone }] });
+    if (existingUser) {
+      return res.status(400).json({ error: 'User already exists with this email or phone' });
+    }
+    const user = await User.create({
+      email, passwordHash: password, firstName, lastName, phone,
+      kycTier: 1, dailyTransactionLimit: 10000000, monthlyTransactionLimit: 50000000
+    });
+    const wallet = await Wallet.create({
+      userId: user._id, balance: 0, currency: 'NGN',
+      wallets: [{ currency: 'NGN', balance: 0, dailyLimit: 10000000, monthlyLimit: 20000000 }]
+    });
+    user.walletId = wallet._id;
+    await user.save();
+    const token = jwt.sign({ userId: user._id }, process.env.JWT_SECRET, { expiresIn: '7d' });
+    res.status(201).json({
+      success: true, message: 'User registered successfully', token,
+      user: { id: user._id, email: user.email, firstName: user.firstName, lastName: user.lastName, phone: user.phone, kycTier: user.kycTier }
+    });
+  } catch (error) {
+    res.status(500).json({ error: error.message || 'Registration failed' });
+  }
+});
 
-/**
- * @swagger
- * /auth/login:
- *   post:
- *     tags:
- *       - Authentication
- *     summary: Login with email and password
- *     requestBody:
- *       required: true
- *       content:
- *         application/json:
- *           schema:
- *             type: object
- *             properties:
- *               email:
- *                 type: string
- *               password:
- *                 type: string
- *     responses:
- *       200:
- *         description: Login successful
- *       401:
- *         description: Invalid credentials
- */
-router.post('/login', authController.login);
+// Login
+router.post('/login', async (req, res) => {
+  try {
+    const { email, password } = req.body;
+    if (!email || !password) {
+      return res.status(400).json({ error: 'Email and password are required' });
+    }
+    const user = await User.findOne({ email }).populate('walletId');
+    if (!user) return res.status(401).json({ error: 'Invalid email or password' });
+    const isPasswordValid = await user.comparePassword(password);
+    if (!isPasswordValid) return res.status(401).json({ error: 'Invalid email or password' });
+    const token = jwt.sign({ userId: user._id }, process.env.JWT_SECRET, { expiresIn: '7d' });
+    res.json({
+      success: true, message: 'Login successful', token,
+      user: {
+        id: user._id, email: user.email, firstName: user.firstName,
+        lastName: user.lastName, phone: user.phone, kycTier: user.kycTier,
+        wallet: { balance: user.walletId ? user.walletId.getWallet('NGN').balance / 100 : 0, currency: 'NGN' }
+      }
+    });
+  } catch (error) {
+    res.status(500).json({ error: 'Login failed' });
+  }
+});
 
-/**
- * @swagger
- * /auth/admin/login:
- *   post:
- *     tags:
- *       - Authentication
- *     summary: Admin login
- *     requestBody:
- *       required: true
- *       content:
- *         application/json:
- *           schema:
- *             type: object
- *             properties:
- *               email:
- *                 type: string
- *               password:
- *                 type: string
- *     responses:
- *       200:
- *         description: Admin login successful
- *       401:
- *         description: Invalid credentials or not an admin
- *       500:
- *         description: Server error
- */
-router.post('/admin/login', authController.adminLogin);
+// Get current user
+router.get('/me', authMiddleware, async (req, res) => {
+  try {
+    const user = await User.findById(req.userId).select('-passwordHash').populate('walletId');
+    if (!user) return res.status(404).json({ error: 'User not found' });
+    res.json({
+      success: true,
+      user: {
+        id: user._id, email: user.email, firstName: user.firstName,
+        lastName: user.lastName, phone: user.phone, kycTier: user.kycTier,
+        wallet: { balance: user.walletId ? user.walletId.getWallet('NGN').balance / 100 : 0, currency: 'NGN' }
+      }
+    });
+  } catch (error) {
+    res.status(500).json({ error: 'Failed to fetch user' });
+  }
+});
 
-/**
- * @swagger
- * /auth/google:
- *   post:
- *     tags:
- *       - Authentication
- *     summary: Sign in with Google OAuth
- *     requestBody:
- *       required: true
- *       content:
- *         application/json:
- *           schema:
- *             type: object
- *             properties:
- *               googleId:
- *                 type: string
- *               email:
- *                 type: string
- *               firstName:
- *                 type: string
- *               lastName:
- *                 type: string
- *               profilePicture:
- *                 type: string
- *     responses:
- *       200:
- *         description: Google sign-in successful
- */
-router.post('/google', authController.googleSignIn);
-
-/**
- * @swagger
- * /auth/refresh:
- *   post:
- *     tags:
- *       - Authentication
- *     summary: Refresh access token
- *     requestBody:
- *       required: true
- *       content:
- *         application/json:
- *           schema:
- *             type: object
- *             properties:
- *               refreshToken:
- *                 type: string
- *     responses:
- *       200:
- *         description: New tokens generated
- *       401:
- *         description: Invalid refresh token
- */
-router.post('/refresh', authController.refreshTokens);
-
-/**
- * @swagger
- * /auth/send-otp:
- *   post:
- *     tags:
- *       - Authentication
- *     summary: Send OTP to phone number
- *     requestBody:
- *       required: true
- *       content:
- *         application/json:
- *           schema:
- *             type: object
- *             properties:
- *               phone:
- *                 type: string
- *     responses:
- *       200:
- *         description: OTP sent successfully
- */
-router.post('/send-otp', authController.sendOtpHandler);
-
-/**
- * @swagger
- * /auth/verify-otp:
- *   post:
- *     tags:
- *       - Authentication
- *     summary: Verify OTP and get token
- *     requestBody:
- *       required: true
- *       content:
- *         application/json:
- *           schema:
- *             type: object
- *             properties:
- *               phone:
- *                 type: string
- *               otp:
- *                 type: string
- *     responses:
- *       200:
- *         description: OTP verified
- */
-router.post('/verify-otp', authController.verifyOtp);
-router.post('/verify-signup', authController.completeSignupVerification);
-router.post('/resend-verification', authController.resendSignupVerification);
-
-/**
- * @swagger
- * /auth/logout:
- *   post:
- *     tags:
- *       - Authentication
- *     summary: Logout (invalidate tokens)
- *     responses:
- *       200:
- *         description: Logged out successfully
- */
-router.post('/logout', authController.logout);
-
-/**
- * @swagger
- * /auth/forgot-password:
- *   post:
- *     tags:
- *       - Authentication
- *     summary: Send password reset email
- *     requestBody:
- *       required: true
- *       content:
- *         application/json:
- *           schema:
- *             type: object
- *             properties:
- *               email:
- *                 type: string
- *     responses:
- *       200:
- *         description: Reset email sent
- */
-router.post('/forgot-password', authController.forgotPassword);
-
-/**
- * @swagger
- * /auth/reset-password:
- *   post:
- *     tags:
- *       - Authentication
- *     summary: Reset password with token
- *     requestBody:
- *       required: true
- *       content:
- *         application/json:
- *           schema:
- *             type: object
- *             properties:
- *               token:
- *                 type: string
- *               password:
- *                 type: string
- *     responses:
- *       200:
- *         description: Password reset successful
- */
-router.post('/reset-password', authController.resetPassword);
-
-/**
- * @swagger
- * /auth/pin-status:
- *   get:
- *     tags:
- *       - PIN Management
- *     summary: Check if user has PIN set
- *     security:
- *       - bearerAuth: []
- *     responses:
- *       200:
- *         description: PIN status retrieved
- *         content:
- *           application/json:
- *             schema:
- *               type: object
- *               properties:
- *                 isSet:
- *                   type: boolean
- */
-router.get('/pin-status', authController.getPinStatus);
-
-/**
- * @swagger
- * /auth/set-pin:
- *   post:
- *     tags:
- *       - PIN Management
- *     summary: Set up a new transaction PIN
- *     security:
- *       - bearerAuth: []
- *     requestBody:
- *       required: true
- *       content:
- *         application/json:
- *           schema:
- *             type: object
- *             properties:
- *               pin:
- *                 type: string
- *                 description: 4-digit PIN
- *     responses:
- *       200:
- *         description: PIN set successfully
- */
-router.post('/set-pin', authController.setPin);
-
-/**
- * @swagger
- * /auth/verify-pin:
- *   post:
- *     tags:
- *       - PIN Management
- *     summary: Verify PIN for transactions
- *     security:
- *       - bearerAuth: []
- *     requestBody:
- *       required: true
- *       content:
- *         application/json:
- *           schema:
- *             type: object
- *             properties:
- *               pin:
- *                 type: string
- *                 description: 4-digit PIN
- *     responses:
- *       200:
- *         description: PIN verified
- */
-router.post('/verify-pin', authController.verifyPin);
-
-/**
- * @swagger
- * /auth/change-pin:
- *   post:
- *     tags:
- *       - PIN Management
- *     summary: Change existing transaction PIN
- *     security:
- *       - bearerAuth: []
- *     requestBody:
- *       required: true
- *       content:
- *         application/json:
- *           schema:
- *             type: object
- *             properties:
- *               oldPin:
- *                 type: string
- *                 description: Current 4-digit PIN
- *               newPin:
- *                 type: string
- *                 description: New 4-digit PIN
- *     responses:
- *       200:
- *         description: PIN changed successfully
- */
-router.post('/change-pin', authController.changePin);
+// KYC upgrade
+router.post('/kyc-upgrade', authMiddleware, async (req, res) => {
+  try {
+    const { bvn, nin, targetTier } = req.body;
+    const user = await User.findById(req.userId);
+    if (!user) return res.status(404).json({ error: 'User not found' });
+    if (targetTier <= user.kycTier) return res.status(400).json({ error: 'Target tier must be higher than current tier' });
+    if (bvn) user.bvn = bvn;
+    if (nin) user.nin = nin;
+    user.kycTier = targetTier;
+    if (targetTier === 2) { user.dailyTransactionLimit = 50000000; user.monthlyTransactionLimit = 200000000; }
+    else if (targetTier === 3) { user.dailyTransactionLimit = 200000000; user.monthlyTransactionLimit = 1000000000; }
+    await user.save();
+    res.json({ success: true, message: 'KYC tier upgraded successfully', kycTier: user.kycTier });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
 
 module.exports = router;
